@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>C-powered metrics</title>
+  </head>
+  <body>
+    <div id="root">
+      <main class="card">
+        <div class="eyebrow">C + WebView + Octane</div>
+        <h1>Batch metrics</h1>
+        <p class="intro">Enter comma-separated numbers. The native C engine validates and calculates the summary.</p>
+        <label for="values">Samples</label>
+        <textarea id="values" spellcheck="false">12.5, 15, 8.5, 14</textarea>
+        <button id="calculate" type="button">Calculate metrics</button>
+        <section id="result" class="result" aria-live="polite">
+          <p class="placeholder">Your summary will appear here.</p>
+        </section>
+        <p class="hint">Count, sum, mean, variance, minimum, and maximum are computed natively.</p>
+      </main>
+    </div>
+  </body>
+</html>

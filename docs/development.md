@@ -77,12 +77,13 @@ The generated frontend HTML is registered as a CMake build output. Re-running
 bundle, and native objects when their inputs have not changed. The frontend is
 rebuilt only when one of its source, configuration, or package files changes.
 
-`run.sh` builds the frontend and the desktop host navigates directly to the
-generated `frontend-octane/dist/index.html` through a local `file://` URL. No
-frontend server is required. To force the inline strategy, use:
+`run.sh` builds the frontend and the desktop host loads the contents of the
+generated `frontend-octane/dist/index.html` directly into WebView. No frontend
+server is required. This is the default because it reliably executes the
+bundled script in WebKit. To force local-file navigation instead, use:
 
 ```sh
-METRICS_RENDER_MODE=inline ./run.sh
+METRICS_RENDER_MODE=file ./run.sh
 ```
 
 For direct CMake launches, the same `file://` strategy is used when no
@@ -139,6 +140,15 @@ ldd build/desktop/bin/metrics_desktop | grep 'not found'
 The host also reports the failing WebView stage (`set_html`, `bind summarize`,
 or `run`) and its WebView error code. This distinguishes a native window/runtime
 problem from a frontend bundle problem.
+
+The host also installs a small diagnostic script before loading the page. A
+frontend JavaScript exception or unhandled promise rejection is logged to the
+terminal and displayed inside the WebView, instead of leaving only the page
+background visible.
+
+That bootstrap also polyfills `Object.hasOwn`, which is used by WebView 0.12's
+binding bootstrap but is missing in some WebKit JavaScript runtimes. Without
+the polyfill, the UI can render while `window.summarize` is never installed.
 
 With WebView 0.12 on GTK, `set_size` may report error code `-2` after applying
 the requested size because of an upstream fall-through bug. The host logs this

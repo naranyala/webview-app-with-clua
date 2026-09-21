@@ -10,6 +10,7 @@ frontend-octane/
 ├── src/index.js                 Octane root mounting
 ├── src/App.tsrx                 metrics UI and bridge interaction
 ├── src/App.css                  layout and visual styling
+├── public/index.html            static HTML shell for WebView compatibility
 ├── rsbuild.config.js            Octane, Tailwind, and single-file setup
 └── plugins/single-file-html.js  removes non-HTML build artifacts
 ```
@@ -32,7 +33,9 @@ native host.
 
 ## UI behavior
 
-`App.tsrx` performs only presentation-side work:
+The static HTML shell in `public/index.html` owns the initial visible layout.
+This is intentional: WebView receives the form elements even if JavaScript
+mounting is delayed or unavailable. `src/index.js` performs behavior work:
 
 1. Split the textarea by commas.
 2. Trim each token and reject blank/non-finite values.

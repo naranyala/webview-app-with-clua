@@ -7,4 +7,4 @@ app="$build_dir/bin/metrics_desktop"
 
 cmake -S "$project_dir" -B "$build_dir"
 cmake --build "$build_dir" --target metrics_desktop
-METRICS_RENDER_MODE="${METRICS_RENDER_MODE:-file}" "$app"
+METRICS_RENDER_MODE="${METRICS_RENDER_MODE:-inline}" "$app"

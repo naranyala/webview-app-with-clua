@@ -12,6 +12,9 @@ export default defineConfig({
     inlineScripts: true,
     inlineStyles: true,
   },
+  html: {
+    template: './public/index.html',
+  },
   performance: {
     chunkSplit: {
       strategy: 'all-in-one',

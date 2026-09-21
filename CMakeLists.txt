@@ -33,6 +33,7 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/src/index.js"
   "${FRONTEND_DIR}/src/App.tsrx"
   "${FRONTEND_DIR}/src/App.css"
+  "${FRONTEND_DIR}/public/index.html"
   "${FRONTEND_DIR}/rsbuild.config.js"
   "${FRONTEND_DIR}/plugins/single-file-html.js"
   "${FRONTEND_DIR}/package.json"

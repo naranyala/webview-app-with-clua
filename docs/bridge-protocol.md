@@ -10,7 +10,10 @@ const summary = await window.summarize([12.5, 15, 8.5, 14]);
 ```
 
 The frontend converts its text input into an array of finite JavaScript
-numbers before calling the bridge.
+numbers before calling the bridge. It normally calls `window.summarize`; for
+older WebKit runtimes where the convenience property is not installed, it can
+use the equivalent internal `window.__webview__.call('summarize', values)`
+path.
 
 ## Native request shape
 

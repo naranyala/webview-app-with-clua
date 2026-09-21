@@ -52,8 +52,30 @@ static void on_summarize(const char *id, const char *request, void *argument) {
     app_context *app = argument;
     char response[512];
     int ok = summarize_request(request, response, sizeof(response));
-    webview_return(app->view, id, ok ? 0 : 1, response);
+    fprintf(stderr, "summarize request: %s\n", request != NULL ? request : "<null>");
+    fprintf(stderr, "summarize response: %s (status=%d)\n", response, ok ? 0 : 1);
+    if (WEBVIEW_FAILED(webview_return(app->view, id, ok ? 0 : 1, response))) {
+        fputs("WebView failed to return the summarize response.\n", stderr);
+    }
 }
+
+static const char *frontend_diagnostics_js =
+    "(function(){"
+    "if(!Object.hasOwn){Object.hasOwn=function(object,property){return Object.prototype.hasOwnProperty.call(object,property);};}"
+    "function report(message){"
+    "  console.error(message);"
+    "  function paint(){"
+    "    if(!document.body)return;"
+    "    var box=document.createElement('pre');"
+    "    box.textContent=message;"
+    "    box.style='margin:24px;padding:20px;border:2px solid #fda29b;border-radius:10px;background:#3b1620;color:#ffd6d2;font:14px monospace;white-space:pre-wrap';"
+    "    document.body.appendChild(box);"
+    "  }"
+    "  if(document.body)paint();else document.addEventListener('DOMContentLoaded',paint);"
+    "}"
+    "window.addEventListener('error',function(event){report('Frontend JavaScript error: '+event.message+' at '+event.filename+':'+event.lineno+':'+event.colno);});"
+    "window.addEventListener('unhandledrejection',function(event){report('Frontend promise rejection: '+String(event.reason));});"
+    "}());";
 
 static char *load_html(const char *path) {
     FILE *file = fopen(path, "rb");
@@ -90,6 +112,7 @@ int main(void) {
         return 1;
     }
     if (!check_webview_error("set_title", webview_set_title(app.view, "C-powered Lua metrics"))) goto fail;
+    if (!check_webview_error("init frontend diagnostics", webview_init(app.view, frontend_diagnostics_js))) goto fail;
     {
         webview_error_t size_error = webview_set_size(app.view, 760, 540, WEBVIEW_HINT_NONE);
         if (WEBVIEW_FAILED(size_error)) {
