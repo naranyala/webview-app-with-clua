@@ -1,0 +1,32 @@
+# Native and CMake build output
+/build/
+/cmake-build-*/
+/compile_commands.json
+/CMakeUserPresets.json
+
+# Frontend build output and dependencies
+/frontend-octane/dist/
+/frontend-octane/node_modules/
+/frontend-octane/.cache/
+/frontend-octane/.rsbuild-cache/
+/frontend-octane/.turbo/
+
+# Package-manager and tool caches
+.npm/
+.pnpm-store/
+.yarn/
+.cache/
+
+# Coverage and test artifacts
+coverage/
+.coverage/
+*.lcov
+
+# Local editor and operating-system files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
