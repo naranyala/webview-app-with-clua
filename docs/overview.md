@@ -15,10 +15,11 @@ population variance (`M2 / count`, not sample variance).
 
 ## User experience
 
-The desktop UI starts with example values. A user can replace them with
-comma-separated numbers and select **Calculate metrics**. The frontend shows a
-loading state while the request crosses the WebView bridge, then renders the
-native summary or a useful error.
+The desktop UI starts with example values in a bare-minimum text editor. A user
+can replace them, select **Run metrics** from the top toolbar or right-side
+vertical toolbar, and inspect the native summary in the output panel. The
+frontend shows a loading state while the request crosses the WebView bridge,
+then renders the native summary or a useful error.
 
 The ordinary frontend development server is useful for layout work, but it
 does not provide the native bridge. In that mode, submitting the form reports

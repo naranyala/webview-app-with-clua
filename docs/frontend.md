@@ -8,8 +8,8 @@ an Octane application built by Rsbuild.
 ```text
 frontend-octane/
 ├── src/index.js                 Octane root mounting
-├── src/App.tsrx                 metrics UI and bridge interaction
-├── src/App.css                  layout and visual styling
+├── src/App.tsrx                 editor UI, behavior, and bridge interaction
+├── src/App.css                  editor layout and visual styling
 ├── public/index.html            static HTML shell for WebView compatibility
 ├── rsbuild.config.js            Octane, Tailwind, and single-file setup
 └── plugins/single-file-html.js  removes non-HTML build artifacts
@@ -33,15 +33,18 @@ native host.
 
 ## UI behavior
 
-The static HTML shell in `public/index.html` owns the initial visible layout.
-This is intentional: WebView receives the form elements even if JavaScript
-mounting is delayed or unavailable. `src/index.js` performs behavior work:
+The static HTML shell in `public/index.html` owns the initial visible editor
+layout: a top toolbar, a plain text editing surface, a right-side vertical
+toolbar, and an output panel. This is intentional: WebView receives the editor
+even if JavaScript mounting is delayed or unavailable. When JavaScript is
+available, `src/index.js` mounts `App.tsrx`, which owns the behavior:
 
-1. Split the textarea by commas.
-2. Trim each token and reject blank/non-finite values.
-3. Show a loading state.
-4. Call `window.summarize(values)`.
-5. Render the returned metrics or a readable error.
+1. Keep the text editor and cursor indicator responsive.
+2. Split the editor text by commas.
+3. Trim each token and reject blank/non-finite values.
+4. Show a loading state.
+5. Call `window.summarize(values)`.
+6. Render the returned metrics or a readable error.
 
 It does not duplicate the native statistics implementation.
 
