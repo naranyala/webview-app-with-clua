@@ -77,18 +77,17 @@ The generated frontend HTML is registered as a CMake build output. Re-running
 bundle, and native objects when their inputs have not changed. The frontend is
 rebuilt only when one of its source, configuration, or package files changes.
 
-`run.sh` serves the generated page from a loopback HTTP server and the desktop
-host navigates to `http://127.0.0.1:4173/index.html`. This avoids both local
-file restrictions and copying the large HTML string into the WebView. To force
-the inline strategy, use:
+`run.sh` builds the frontend and the desktop host navigates directly to the
+generated `frontend-octane/dist/index.html` through a local `file://` URL. No
+frontend server is required. To force the inline strategy, use:
 
 ```sh
 METRICS_RENDER_MODE=inline ./run.sh
 ```
 
-For direct CMake launches, the host uses `file://` navigation when no frontend
-URL is supplied. It falls back to inline HTML if navigation fails. Change the
-loopback port with `METRICS_HTTP_PORT=...`.
+For direct CMake launches, the same `file://` strategy is used when no
+frontend URL is supplied. If local-file navigation fails, the host falls back
+to reading the artifact and injecting it with `webview_set_html`.
 
 ## Build outputs
 

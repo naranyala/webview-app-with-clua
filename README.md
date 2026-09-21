@@ -97,8 +97,8 @@ input and presentation; C owns validation, state, and computation.
 - WebView developer tools are enabled by default for inspecting the embedded
   frontend; disable them with `-DMETRICS_ENABLE_DEVTOOLS=OFF` for release-like
   builds.
-- `run.sh` serves the generated page over loopback HTTP before launching the
-  WebView; force inline mode with `METRICS_RENDER_MODE=inline ./run.sh`.
+- `run.sh` loads the generated `frontend-octane/dist/index.html` directly into
+  WebView; force inline HTML injection with `METRICS_RENDER_MODE=inline ./run.sh`.
 - `make test` requires a discoverable Lua development installation; the C
   core, bridge, and sanitizer targets are independent of Lua.
 
