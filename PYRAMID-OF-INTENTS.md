@@ -139,8 +139,8 @@ Known gaps:
 - Full Lua test execution depends on installed Lua development metadata.
 - The frontend has build/format checks but no browser behavior test runner.
 - The desktop frontend-to-C path lacks an automated GUI smoke test.
-- Bridge errors still use a simple string payload rather than structured error
-  codes.
+- Bridge output is structured, but response-buffer truncation and frontend
+  component-level interaction coverage still require explicit tests.
 - The desktop build fetches WebView through CMake on first use.
 - The frontend cannot calculate in a normal browser preview without the native
   bridge, by design.

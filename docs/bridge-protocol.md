@@ -15,6 +15,16 @@ older WebKit runtimes where the convenience property is not installed, it can
 use the equivalent internal `window.__webview__.call('summarize', values)`
 path.
 
+## Bridge detection
+
+The frontend detects the bridge using this priority:
+
+1. `window.summarize` - Direct binding from webview library (preferred)
+2. `window.__webview__.call('summarize', values)` - Alternative binding
+
+If neither is available, the UI displays an error indicating the desktop app
+is required for calculations.
+
 ## Native request shape
 
 The WebView library serializes the call as an argument list. For one argument,
@@ -60,6 +70,15 @@ out-of-range numbers, and `OUT_OF_MEMORY` for native allocation failure.
 
 The native callback also reports a failed WebView binding result. The frontend
 handles this through its `try/catch` path and displays the returned message.
+
+## Frontend error handling
+
+The frontend provides detailed error messages for common issues:
+
+- **Empty input**: "Enter one or more finite numbers separated by commas."
+- **Empty tokens**: "Found N empty tokens. Each comma should separate two numbers."
+- **Invalid numbers**: "Invalid number(s): [list of first 3 invalid values]"
+- **Bridge unavailable**: "The native WebView bridge is unavailable. Run the desktop app to calculate metrics."
 
 ## Testing the contract
 

@@ -10,6 +10,8 @@ frontend-octane/
 ├── src/index.js                 Octane root mounting
 ├── src/App.tsrx                 editor UI, behavior, and bridge interaction
 ├── src/App.css                  editor layout and visual styling
+├── src/metrics-ui.js            parsing, formatting, and summary rendering
+├── src/global.d.ts              TypeScript type declarations
 ├── public/index.html            static HTML shell for WebView compatibility
 ├── rsbuild.config.js            Octane, Tailwind, and single-file setup
 └── plugins/single-file-html.js  removes non-HTML build artifacts
@@ -45,8 +47,42 @@ available, `src/index.js` mounts `App.tsrx`, which owns the behavior:
 4. Show a loading state.
 5. Call `window.summarize(values)`.
 6. Render the returned metrics or a readable error.
+7. Track calculation history.
+8. Allow exporting history as JSON.
 
 It does not duplicate the native statistics implementation.
+
+## Features
+
+### Input Validation
+- Real-time input validation with descriptive error messages
+- Token counting and validation status display
+- Support for integers, decimals, negative numbers, and scientific notation
+
+### Calculation History
+- All calculations are tracked in memory
+- Export history as JSON file for analysis
+- Timestamps for each calculation
+
+### Keyboard Shortcuts
+- `Ctrl+Enter` - Run metrics calculation
+
+### UI Enhancements
+- Responsive design for different screen sizes
+- Better number formatting with comma separators
+- Timestamp display for calculation results
+- Help panel with usage instructions
+
+## Bridge Integration
+
+The frontend communicates with the native C engine through the WebView bridge.
+The bridge detection logic checks for:
+
+1. `window.summarize` - Direct binding from webview library
+2. `window.__webview__.call` - Alternative binding for older WebKit runtimes
+
+If neither is available, the UI shows an error message indicating that the
+desktop app is required for calculations.
 
 ## Browser development
 
@@ -66,7 +102,9 @@ make desktop
 When changing the input grammar or result fields:
 
 1. Update `App.tsrx`.
-2. Update [the bridge protocol](bridge-protocol.md).
-3. Update bridge and frontend tests.
-4. Run `npm run check` and `npm run build`.
-5. Run the desktop application for a manual end-to-end check.
+2. Update `metrics-ui.js` for parsing/formatting changes.
+3. Update `global.d.ts` for TypeScript type declarations.
+4. Update [the bridge protocol](bridge-protocol.md).
+5. Update bridge and frontend tests.
+6. Run `npm run check` and `npm run build`.
+7. Run the desktop application for a manual end-to-end check.

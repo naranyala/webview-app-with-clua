@@ -247,6 +247,55 @@ button {
   white-space: nowrap;
   border: 0;
 }
+.help-content {
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.help-content p {
+  margin: 8px 0;
+}
+.help-content ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.help-content li {
+  margin: 4px 0;
+}
+.help-content kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #30343c;
+  color: #e8ebef;
+  font-family: monospace;
+  font-size: 0.78rem;
+}
+.error-details {
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+.error-details .error-message {
+  margin: 0 0 8px;
+  color: #f2a6a6;
+  font-weight: 500;
+}
+.error-details .error-help {
+  margin: 0;
+  color: #8d939e;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+.summary-value {
+  font-variant-numeric: tabular-nums;
+}
+.timestamp {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #30343c;
+  color: #666d79;
+  font-size: 0.72rem;
+  text-align: right;
+}
 @media (max-width: 700px) {
   .topbar {
     gap: 10px;
@@ -266,5 +315,12 @@ button {
   }
   .summary-grid {
     grid-template-columns: repeat(3, 1fr);
+  }
+  .top-actions {
+    gap: 4px;
+  }
+  .toolbar-button {
+    padding: 6px 8px;
+    font-size: 0.72rem;
   }
 }

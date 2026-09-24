@@ -179,6 +179,112 @@ Priority levels:
 - **Done when:** The new capability has C tests, Lua coverage, bridge coverage,
   and frontend coverage without duplicating engine ownership logic.
 
+## Execution plan — remaining gaps
+
+The following items turn the current review into an explicit implementation
+sequence. The first slice is intentionally limited to correctness, contract
+consistency, and low-risk editor usability. The second slice requires a real
+desktop or CI environment and remains planned rather than implied complete.
+
+### TODO-016 — Make response-buffer sizing a hard bridge contract — DONE
+
+- **Intent:** I3.3, I3.4, I4.1
+- **Priority:** P1
+- **Work:** Reject truncated success or error JSON, clear an undersized output
+  buffer, document the behavior, and test both success and error responses.
+- **Done when:** A caller never receives a successful status with malformed or
+  truncated JSON.
+- **Evidence:** `write_summary` and `write_error` now detect `snprintf`
+  truncation; bridge tests expect undersized buffers to return failure.
+
+### TODO-017 — Test the actual Octane editor interactions
+
+- **Intent:** I2.1, I2.2, I2.3, I4.1, I4.4
+- **Priority:** P1
+- **Work:** Add a DOM-capable test harness for `App.tsrx` covering Run, New,
+  Copy, Help, keyboard submission, loading, bridge success, and bridge failure.
+- **Done when:** `npm test` exercises the component event paths instead of only
+  testing the pure formatting helpers.
+
+### TODO-018 — Prevent static-shell and Octane-component drift
+
+- **Intent:** I1.2, I1.3, I3.5, I4.4
+- **Priority:** P1
+- **Work:** Define the static HTML shell as a deliberate fallback and add a
+  contract test checking that its required IDs, toolbar actions, and editor
+  defaults remain compatible with `App.tsrx`.
+- **Done when:** A change to either entry point fails a repeatable parity check
+  before it can silently break WebView startup.
+- **Status:** Implementation started; the frontend test suite now checks the
+  shared element IDs and visible defaults. A richer DOM parity check remains.
+
+### TODO-019 — Add an end-to-end desktop smoke test
+
+- **Intent:** I1.1, I1.2, I2.1, I4.1
+- **Priority:** P0
+- **Work:** Build the single-file frontend and desktop host, launch it under a
+  supported graphical session, invoke the real bridge, and verify the rendered
+  summary or capture a deterministic WebView callback result.
+- **Done when:** The actual frontend-to-C path is verified in CI or by one
+  documented local command, including the inline and file render modes.
+
+### TODO-020 — Add continuous integration for supported boundaries
+
+- **Intent:** I1.3, I2.4, I4.1, I4.3
+- **Priority:** P2
+- **Work:** Add a GitHub Actions matrix for C tests, sanitizers, Lua tests,
+  frontend check/build/test, and desktop compilation where GTK/WebKit are
+  available.
+- **Done when:** Pull requests automatically detect broken native, Lua,
+  frontend, and contract assumptions.
+
+### TODO-021 — Provide a reproducible Lua development environment
+
+- **Intent:** I1.3, I1.4, I4.3
+- **Priority:** P2
+- **Work:** Add a documented container or setup script with a supported Lua
+  version, headers, pkg-config metadata, and the exact commands for `make test`.
+- **Done when:** A new contributor can run the complete Lua workflow without
+  discovering distro-specific package names manually.
+
+### TODO-022 — Make WebView dependency acquisition immutable
+
+- **Intent:** I1.3, I3.5, I4.3
+- **Priority:** P2
+- **Work:** Replace the mutable WebView Git tag dependency with an immutable
+  commit or verified archive, and document cache/offline behavior.
+- **Done when:** Repeated clean builds resolve the same WebView source and
+  first-run network requirements are explicit.
+
+### TODO-023 — Add installation and release artifacts
+
+- **Intent:** I0.1, I1.3, I2.4, I3.5
+- **Priority:** P2
+- **Work:** Add a CMake install target or release packaging path containing the
+  desktop binary and self-contained frontend artifact, with platform notes.
+- **Done when:** A built project can be installed or archived without relying
+  on the source checkout layout.
+
+### TODO-024 — Improve editor accessibility and low-friction actions — DONE
+
+- **Intent:** I2.1, I2.3, I2.4
+- **Priority:** P3
+- **Work:** Add a keyboard shortcut for Run and a Copy action with visible
+  success/failure status while preserving the minimal editor surface.
+- **Done when:** Users can submit with Ctrl/Cmd+Enter and copy a completed
+  result without leaving the editor.
+- **Evidence:** `App.tsrx` implements keyboard submission and clipboard/fallback
+  copying; the top toolbar exposes `Copy`.
+
+### TODO-025 — Audit intent and documentation claims after each slice
+
+- **Intent:** I0.1, I1.2, I1.3, I4.4
+- **Priority:** P1
+- **Work:** Remove stale known-gap claims, keep the Octane DSL authoritative in
+  the frontend guide, and record test/build evidence for completed items.
+- **Done when:** README, intent pyramid, TODOs, architecture docs, and source
+  layout describe the same runtime path.
+
 ## Backlog rules
 
 - Do not add a TODO without an `Intent:` line.

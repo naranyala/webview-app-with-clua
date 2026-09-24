@@ -11,73 +11,200 @@ static const char *skip_space(const char *cursor) {
     return cursor;
 }
 
-static void write_error(char *response, size_t response_size, const char *code, const char *message) {
-    snprintf(response, response_size,
-             "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
-             code, message);
+static int write_error(char *response, size_t response_size, const char *code, const char *message) {
+    int written = snprintf(response, response_size,
+                            "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+                            code, message);
+    if (written < 0 || (size_t)written >= response_size) {
+        if (response_size > 0) response[0] = '\0';
+        return 0;
+    }
+    return 1;
 }
 
-int summarize_request(const char *request, char *response, size_t response_size) {
+static int write_summary(char *response, size_t response_size, const metrics_summary *summary) {
+    int written = snprintf(response, response_size,
+                            "{\"count\":%zu,\"sum\":%.17g,\"min\":%.17g,\"max\":%.17g,\"mean\":%.17g,\"variance\":%.17g}",
+                            summary->count, summary->sum, summary->min, summary->max,
+                            summary->mean, summary->variance);
+    if (written < 0 || (size_t)written >= response_size) {
+        if (response_size > 0) response[0] = '\0';
+        return 0;
+    }
+    return 1;
+}
+
+static bridge_error parse_number_array(const char **cursor_ref, metrics_engine *engine) {
+    const char *cursor = *cursor_ref;
+    int first = 1;
+
+    for (;;) {
+        char *end;
+        double value;
+        metrics_error merr;
+
+        cursor = skip_space(cursor);
+
+        /* Check for end of array */
+        if (*cursor == ']') break;
+
+        /* If not the first element, expect a comma separator */
+        if (!first) {
+            if (*cursor != ',') return BRIDGE_ERR_MALFORMED_REQUEST;
+            cursor++;
+            cursor = skip_space(cursor);
+        }
+        first = 0;
+
+        /* Parse a number */
+        value = strtod(cursor, &end);
+        if (end == cursor) return BRIDGE_ERR_MALFORMED_REQUEST;
+        cursor = end;
+
+        /* Add the number to the engine */
+        merr = metrics_add(engine, value);
+        if (merr == METRICS_ERR_NON_FINITE) return BRIDGE_ERR_INVALID_VALUE;
+        if (merr != METRICS_OK) return BRIDGE_ERR_ENGINE_FAILED;
+    }
+
+    *cursor_ref = cursor;
+    return BRIDGE_OK;
+}
+
+bridge_error summarize_request(const char *request, char *response, size_t response_size) {
     const char *cursor;
     metrics_engine *engine;
     metrics_summary summary;
-    const char *error_code = "INVALID_REQUEST";
-    const char *error_message = "Send one non-empty array of finite numbers.";
-    int ok = 0;
+    bridge_error err;
 
-    if (response == NULL || response_size == 0) return 0;
+    if (response == NULL || response_size == 0) return BRIDGE_ERR_NULL_RESPONSE;
+    response[0] = '\0';
+
     if (request == NULL) {
-        write_error(response, response_size, error_code, error_message);
-        return 0;
+        write_error(response, response_size, "INVALID_REQUEST", "Request must not be null.");
+        return BRIDGE_ERR_NULL_REQUEST;
     }
-    cursor = skip_space(request);
+
     engine = metrics_create();
     if (engine == NULL) {
         write_error(response, response_size, "OUT_OF_MEMORY", "Could not allocate a metrics engine.");
-        return 0;
+        return BRIDGE_ERR_OUT_OF_MEMORY;
     }
-    if (*cursor++ != '[') goto done;
-    cursor = skip_space(cursor);
-    if (*cursor++ != '[') goto done;
-    cursor = skip_space(cursor);
 
-    if (*cursor == ']') {
-        error_code = "EMPTY_INPUT";
-        error_message = "Send a non-empty array of finite numbers.";
+    cursor = skip_space(request);
+
+    /* Expect outer array: [ ... ] */
+    if (*cursor != '[') {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Request must be a JSON array: [[number, ...]].");
+        err = BRIDGE_ERR_MALFORMED_REQUEST;
         goto done;
-    }
-    for (;;) {
-        char *end;
-        double value = strtod(cursor, &end);
-        if (end == cursor) goto done;
-        if (metrics_add(engine, value) != 0) {
-            error_code = "INVALID_VALUE";
-            error_message = "Every value must be finite and within the numeric range.";
-            goto done;
-        }
-        cursor = skip_space(end);
-        if (*cursor == ']') break;
-        if (*cursor++ != ',') goto done;
-        cursor = skip_space(cursor);
     }
     cursor++;
     cursor = skip_space(cursor);
-    if (*cursor++ != ']') goto done;
+
+    /* Expect inner array: [ ... ] */
+    if (*cursor != '[') {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Request must contain an inner array of numbers: [[number, ...]].");
+        err = BRIDGE_ERR_MALFORMED_REQUEST;
+        goto done;
+    }
+    cursor++;
     cursor = skip_space(cursor);
-    if (*cursor != '\0') goto done;
-    if (metrics_get_summary(engine, &summary) != 0) {
-        error_code = "EMPTY_INPUT";
-        error_message = "Send a non-empty array of finite numbers.";
+
+    /* Handle empty inner array */
+    if (*cursor == ']') {
+        write_error(response, response_size, "EMPTY_INPUT",
+                    "The inner array must contain at least one finite number.");
+        err = BRIDGE_ERR_EMPTY_INPUT;
         goto done;
     }
 
-    snprintf(response, response_size,
-             "{\"count\":%zu,\"sum\":%.17g,\"min\":%.17g,\"max\":%.17g,\"mean\":%.17g,\"variance\":%.17g}",
-             summary.count, summary.sum, summary.min, summary.max, summary.mean, summary.variance);
-    ok = 1;
+    /* Parse the number array */
+    err = parse_number_array(&cursor, engine);
+    if (err == BRIDGE_ERR_MALFORMED_REQUEST) {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Expected a comma-separated list of finite numbers.");
+        goto done;
+    }
+    if (err == BRIDGE_ERR_INVALID_VALUE) {
+        write_error(response, response_size, "INVALID_VALUE",
+                    "Every value must be finite (not NaN or infinity) and within the numeric range.");
+        goto done;
+    }
+    if (err != BRIDGE_OK) {
+        write_error(response, response_size, "ENGINE_FAILED",
+                    "The metrics engine rejected one or more values.");
+        goto done;
+    }
+
+    /* Close inner array */
+    if (*cursor != ']') {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Expected closing bracket for inner array.");
+        err = BRIDGE_ERR_MALFORMED_REQUEST;
+        goto done;
+    }
+    cursor++;
+    cursor = skip_space(cursor);
+
+    /* Close outer array */
+    if (*cursor != ']') {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Expected closing bracket for outer array.");
+        err = BRIDGE_ERR_MALFORMED_REQUEST;
+        goto done;
+    }
+    cursor++;
+    cursor = skip_space(cursor);
+
+    /* No trailing data allowed */
+    if (*cursor != '\0') {
+        write_error(response, response_size, "INVALID_REQUEST",
+                    "Unexpected trailing data after the array.");
+        err = BRIDGE_ERR_TRAILING_DATA;
+        goto done;
+    }
+
+    /* Get the summary */
+    {
+        metrics_error merr = metrics_get_summary(engine, &summary);
+        if (merr != METRICS_OK) {
+            write_error(response, response_size, "EMPTY_INPUT",
+                        "The inner array must contain at least one finite number.");
+            err = BRIDGE_ERR_EMPTY_INPUT;
+            goto done;
+        }
+    }
+
+    /* Write the successful response */
+    if (!write_summary(response, response_size, &summary)) {
+        write_error(response, response_size, "BUFFER_TOO_SMALL",
+                    "Response buffer is too small to hold the result.");
+        err = BRIDGE_ERR_BUFFER_TOO_SMALL;
+        goto done;
+    }
+
+    err = BRIDGE_OK;
 
 done:
     metrics_destroy(engine);
-    if (!ok) write_error(response, response_size, error_code, error_message);
-    return ok;
+    return err;
+}
+
+const char *bridge_strerror(bridge_error error) {
+    switch (error) {
+        case BRIDGE_OK:                  return "success";
+        case BRIDGE_ERR_NULL_RESPONSE:   return "response buffer is NULL";
+        case BRIDGE_ERR_BUFFER_TOO_SMALL:return "response buffer is too small";
+        case BRIDGE_ERR_NULL_REQUEST:    return "request string is NULL";
+        case BRIDGE_ERR_OUT_OF_MEMORY:   return "memory allocation failed";
+        case BRIDGE_ERR_MALFORMED_REQUEST:return "request is not valid JSON or has wrong structure";
+        case BRIDGE_ERR_EMPTY_INPUT:     return "input array is empty";
+        case BRIDGE_ERR_INVALID_VALUE:   return "input contains non-finite or out-of-range values";
+        case BRIDGE_ERR_TRAILING_DATA:   return "unexpected data after the JSON array";
+        case BRIDGE_ERR_ENGINE_FAILED:   return "metrics engine rejected a value";
+    }
+    return "unknown error";
 }
