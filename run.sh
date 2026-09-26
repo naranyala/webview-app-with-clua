@@ -2,9 +2,15 @@
 set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-build_dir="$project_dir/build/desktop"
-app="$build_dir/bin/metrics_desktop"
+lua_command=${LUA:-lua}
 
-cmake -S "$project_dir" -B "$build_dir"
-cmake --build "$build_dir" --target metrics_desktop
-METRICS_RENDER_MODE="${METRICS_RENDER_MODE:-inline}" "$app"
+if ! command -v "$lua_command" >/dev/null 2>&1; then
+  printf "Lua executable '%s' not found. Set LUA to a Lua 5.3+ executable.\n" "$lua_command" >&2
+  exit 1
+fi
+
+if [ "$#" -eq 0 ]; then
+  set -- run
+fi
+
+exec "$lua_command" "$project_dir/build.lua" "$@"

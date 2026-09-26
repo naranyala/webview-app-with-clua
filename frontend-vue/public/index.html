@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Native Workspace</title>
+  </head>
+  <body data-view="menu">
+    <div id="root">
+      <main class="app-shell">
+        <header class="launcher-header">
+          <div class="brand">
+            <span class="brand-mark">N</span>
+            <div>
+              <span class="brand-name">Native Workspace</span>
+              <span class="brand-subtitle">Local tools, one workspace</span>
+            </div>
+          </div>
+          <button class="toolbar-button subtle" type="button">All apps</button>
+        </header>
+        <section class="app-menu" aria-label="Application menu">
+          <div class="menu-heading">
+            <span>APPLICATIONS</span>
+            <h1>What would you like to open?</h1>
+            <p>Choose a local tool to get started.</p>
+          </div>
+          <div class="app-grid">
+            <button class="app-card" data-app="editor" type="button">
+              <span class="app-icon text-icon" aria-hidden="true">Aa</span>
+              <span class="app-card-copy">
+                <strong>Text Editor</strong>
+                <small>Write each section of your outline</small>
+              </span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+            <button class="app-card" data-app="pdf" type="button">
+              <span class="app-icon pdf-icon" aria-hidden="true">PDF</span>
+              <span class="app-card-copy">
+                <strong>PDF Reader</strong>
+                <small>Open a PDF from your local system</small>
+              </span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+            <button class="app-card" data-app="images" type="button">
+              <span class="app-icon image-icon" aria-hidden="true">IMG</span>
+              <span class="app-card-copy">
+                <strong>Image Viewer</strong>
+                <small>Browse images grouped by folder</small>
+              </span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+            <button class="app-card" data-app="toc" type="button">
+              <span class="app-icon toc-manager-icon" aria-hidden="true">TOC</span>
+              <span class="app-card-copy">
+                <strong>TOC Manager</strong>
+                <small>Declare outline items, then write each section</small>
+              </span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

@@ -18,7 +18,7 @@ metrics_engine *metrics_create(void) {
 }
 
 void metrics_destroy(metrics_engine *engine) {
-    free(engine);
+    if (engine != NULL) free(engine);
 }
 
 metrics_error metrics_add(metrics_engine *engine, double value) {

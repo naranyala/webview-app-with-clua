@@ -6,7 +6,6 @@ export function parseValues(raw) {
       code: 'INVALID_TYPE',
     };
   }
-
   const trimmed = raw.trim();
   if (trimmed === '') {
     return {
@@ -16,10 +15,8 @@ export function parseValues(raw) {
       code: 'EMPTY_INPUT',
     };
   }
-
   const tokens = trimmed.split(/[,\n]+/).map((value) => value.trim());
   const values = tokens.map((value) => Number(value));
-
   const emptyTokens = tokens.filter((value) => value === '');
   if (emptyTokens.length > 0) {
     return {
@@ -28,7 +25,6 @@ export function parseValues(raw) {
       code: 'EMPTY_TOKENS',
     };
   }
-
   const invalidTokens = tokens.filter(
     (_value, index) => !Number.isFinite(values[index]),
   );
@@ -42,7 +38,6 @@ export function parseValues(raw) {
       code: 'INVALID_NUMBER',
     };
   }
-
   if (values.length > 10000) {
     return {
       ok: false,
@@ -50,25 +45,19 @@ export function parseValues(raw) {
       code: 'TOO_MANY_VALUES',
     };
   }
-
   return { ok: true, values, code: 'OK' };
 }
 
 export function formatNumber(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
     return String(value);
-  }
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-  const formatted = value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-  return formatted || '0';
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') || '0';
 }
 
 export function formatNumberWithCommas(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
     return String(value);
-  }
   const parts = formatNumber(value).split('.');
   parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return parts.join('.');
@@ -76,11 +65,11 @@ export function formatNumberWithCommas(value) {
 
 export function extractBridgeError(response) {
   if (response && typeof response === 'object' && response.error) {
-    const err = response.error;
+    const error = response.error;
     return {
-      code: err.code || 'UNKNOWN_ERROR',
-      message: err.message || 'An unknown error occurred.',
-      raw: err,
+      code: error.code || 'UNKNOWN_ERROR',
+      message: error.message || 'An unknown error occurred.',
+      raw: error,
     };
   }
   return null;
@@ -90,10 +79,7 @@ export function getErrorMessage(error) {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') {
     try {
-      const parsed = JSON.parse(error);
-      const extracted = extractBridgeError(parsed);
-      if (extracted) return `[${extracted.code}] ${extracted.message}`;
-      return getErrorMessage(parsed);
+      return getErrorMessage(JSON.parse(error));
     } catch {
       return error;
     }
@@ -108,10 +94,11 @@ export function getErrorMessage(error) {
 
 export function getErrorCategory(error) {
   if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
-    if (msg.includes('bridge is unavailable')) return 'bridge_unavailable';
-    if (msg.includes('timeout')) return 'timeout';
-    if (msg.includes('network') || msg.includes('fetch')) return 'network';
+    const message = error.message.toLowerCase();
+    if (message.includes('bridge is unavailable')) return 'bridge_unavailable';
+    if (message.includes('timeout')) return 'timeout';
+    if (message.includes('network') || message.includes('fetch'))
+      return 'network';
   }
   if (typeof error === 'string') {
     try {
@@ -120,31 +107,17 @@ export function getErrorCategory(error) {
       return 'unknown';
     }
   }
-  if (error && typeof error === 'object') {
-    if (error.error) {
-      const extracted = extractBridgeError(error);
-      if (extracted) {
-        switch (extracted.code) {
-          case 'EMPTY_INPUT':
-            return 'validation';
-          case 'INVALID_REQUEST':
-            return 'validation';
-          case 'INVALID_VALUE':
-            return 'validation';
-          case 'OUT_OF_MEMORY':
-            return 'backend';
-          case 'BUFFER_TOO_SMALL':
-            return 'backend';
-          case 'ENGINE_FAILED':
-            return 'backend';
-          case 'INTERNAL_ERROR':
-            return 'backend';
-          case 'NULL_REQUEST':
-            return 'backend';
-          default:
-            return 'backend';
-        }
+  if (error && typeof error === 'object' && error.error) {
+    const extracted = extractBridgeError(error);
+    if (extracted) {
+      if (
+        ['EMPTY_INPUT', 'INVALID_REQUEST', 'INVALID_VALUE'].includes(
+          extracted.code,
+        )
+      ) {
+        return 'validation';
       }
+      return 'backend';
     }
   }
   return 'unknown';
@@ -167,50 +140,14 @@ export function getErrorHelp(category) {
   }
 }
 
-export function renderSummary(summary) {
-  const timestamp = new Date().toLocaleTimeString();
-  return `
-    <div class="summary-grid">
-      <div><span>Samples</span><strong class="summary-value">${summary.count}</strong></div>
-      <div><span>Sum</span><strong class="summary-value">${formatNumberWithCommas(summary.sum)}</strong></div>
-      <div><span>Mean</span><strong class="summary-value">${formatNumberWithCommas(summary.mean)}</strong></div>
-      <div><span>Variance</span><strong class="summary-value">${formatNumberWithCommas(summary.variance)}</strong></div>
-      <div><span>Minimum</span><strong class="summary-value">${formatNumberWithCommas(summary.min)}</strong></div>
-      <div><span>Maximum</span><strong class="summary-value">${formatNumberWithCommas(summary.max)}</strong></div>
-    </div>
-    <div class="timestamp">Calculated at ${timestamp}</div>`;
-}
-
-export function renderError(error, category) {
-  const help = getErrorHelp(category);
-  const errorMsg = getErrorMessage(error);
-  return `
-    <div class="error-details">
-      <p class="error-message">${errorMsg}</p>
-      <p class="error-help">${help}</p>
-    </div>`;
-}
-
 export function validateInput(raw) {
   const tokens = raw.split(/[,\n]+/).map((value) => value.trim());
   const values = tokens.map((value) => Number(value));
-
-  const stats = {
-    total: tokens.length,
-    valid: 0,
-    invalid: 0,
-    empty: 0,
-  };
-
-  for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i] === '') {
-      stats.empty++;
-    } else if (Number.isFinite(values[i])) {
-      stats.valid++;
-    } else {
-      stats.invalid++;
-    }
+  const stats = { total: tokens.length, valid: 0, invalid: 0, empty: 0 };
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] === '') stats.empty += 1;
+    else if (Number.isFinite(values[index])) stats.valid += 1;
+    else stats.invalid += 1;
   }
-
   return stats;
 }

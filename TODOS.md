@@ -88,7 +88,7 @@ Priority levels:
 - **Evidence:** `src/metrics.c` now uses Welford’s online population variance;
   `tests/test_metrics.c` covers large, closely spaced values.
 
-### TODO-007 — Harden lifecycle and allocation failure paths
+### TODO-007 — Harden lifecycle and allocation failure paths — DONE
 
 - **Intent:** I3.1, I3.2, I3.4, I4.1
 - **Priority:** P1
@@ -96,6 +96,9 @@ Priority levels:
   allocation, and all early-return paths for leaks or use-after-free risks.
 - **Done when:** Sanitizer or equivalent checks cover the C core and Lua binding,
   and lifecycle behavior is documented.
+- **Evidence:** `metrics_destroy` guards against NULL; `test_metrics` covers
+  operations after destroy, reset cycles, and large-then-reset scenarios;
+  sanitizer builds pass without errors.
 
 ### TODO-008 — Add frontend behavior tests — DONE
 
@@ -151,7 +154,7 @@ Priority levels:
 
 ## P3 — Extend the example without weakening the seams
 
-### TODO-013 — Support file or pasted multiline input
+### TODO-013 — Support file or pasted multiline input — DONE
 
 - **Intent:** I1.1, I2.1, I2.2
 - **Priority:** P3
@@ -159,8 +162,11 @@ Priority levels:
   the UI and bridge contract accordingly.
 - **Done when:** The grammar is documented, tested, and errors identify the
   offending input when possible.
+- **Evidence:** Bridge parser accepts newlines as separators between numbers;
+  frontend `parseValues()` splits on `/[,\n]+/`; tests cover newline-separated
+  and mixed comma-newline input in both C and JS.
 
-### TODO-014 — Add export/copy of the summary
+### TODO-014 — Add export/copy of the summary — DONE
 
 - **Intent:** I2.1, I2.3
 - **Priority:** P3
@@ -168,6 +174,8 @@ Priority levels:
   the native computation contract.
 - **Done when:** Users can copy the displayed result and receive feedback that
   the action succeeded or failed.
+- **Evidence:** `copyResult()` uses clipboard API with fallback; `exportHistory()`
+  creates JSON download; status text shows success/failure feedback.
 
 ### TODO-015 — Add a second native capability as a seam-validation exercise
 
@@ -206,7 +214,7 @@ desktop or CI environment and remains planned rather than implied complete.
 - **Done when:** `npm test` exercises the component event paths instead of only
   testing the pure formatting helpers.
 
-### TODO-018 — Prevent static-shell and Octane-component drift
+### TODO-018 — Prevent static-shell and Octane-component drift — DONE
 
 - **Intent:** I1.2, I1.3, I3.5, I4.4
 - **Priority:** P1
@@ -215,8 +223,9 @@ desktop or CI environment and remains planned rather than implied complete.
   defaults remain compatible with `App.tsrx`.
 - **Done when:** A change to either entry point fails a repeatable parity check
   before it can silently break WebView startup.
-- **Status:** Implementation started; the frontend test suite now checks the
-  shared element IDs and visible defaults. A richer DOM parity check remains.
+- **Evidence:** `tests/static-shell.test.js` checks shared element IDs, CSS
+  classes, ARIA labels, textarea default values, and placeholder text between
+  `public/index.html` and `src/App.tsrx`.
 
 ### TODO-019 — Add an end-to-end desktop smoke test
 
@@ -284,6 +293,122 @@ desktop or CI environment and remains planned rather than implied complete.
   the frontend guide, and record test/build evidence for completed items.
 - **Done when:** README, intent pyramid, TODOs, architecture docs, and source
   layout describe the same runtime path.
+
+## Workspace integration — connecting the four menu tools
+
+These items implement **I1.5** and **I2.5**: the Text Editor, TOC Manager,
+PDF Reader, and Image Viewer must share one persisted store and be able to
+reference each other's content.
+
+### TODO-026 — Unify workspace state behind one persistent store — DONE
+
+- **Intent:** I1.5, I2.5, I4.4
+- **Priority:** P1
+- **Work:** Replace the isolated `native-workspace.toc-items.v1` key with a
+  single `native-workspace.workspace.v1` record holding the active view, the
+  declared outline, the bound item, the untitled editor buffer, the PDF
+  session, and the image selection. Migrate the legacy key, debounce writes,
+  and flush on unload.
+- **Done when:** Restarting the app restores the last view, the outline, the
+  bound section, and the untitled buffer; a legacy outline is migrated without
+  data loss; the store is covered by pure unit tests.
+- **Evidence:** `frontend-vue/src/workspace.js` holds the schema, legacy-key
+  migration, debounced write, and flush path; `tests/workspace.test.js` covers
+  normalization, migration, and save/load (26 tests pass under `npm test`).
+
+### TODO-027 — Surface live workspace state on the menu cards — DONE
+
+- **Intent:** I1.5, I2.5, I2.4
+- **Priority:** P2
+- **Work:** Replace the static card subtitles with derived state: outline
+  count and written sections, current section and word count, last PDF with
+  page position, and last image folder with file count.
+- **Done when:** The menu alone tells the user what each tool currently holds.
+- **Evidence:** `outlineBadge`, `editorBadge`, `pdfBadge`, and `imagesBadge` in
+  `App.vue` replace the static card subtitles; asserted in
+  `tests/static-shell.test.js`.
+
+### TODO-028 — Link outline items to PDF pages — DONE
+
+- **Intent:** I1.5, I2.5, I1.2
+- **Priority:** P1
+- **Work:** Store `links.pdfPage` and `links.pdfName` on an outline item. The
+  PDF sidepanel attaches the current page to a chosen outline item; the
+  outline row and the editor top bar show the link and jump back to that page.
+- **Done when:** A section can be written against a specific source page and
+  navigated in both directions without re-entering the page number.
+- **Evidence:** `attachPdfPageToToc()` stores `links.pdfPage`/`links.pdfName`,
+  `openLinkedPdfPage()` jumps from the outline row and the editor top bar
+  (`#open-linked-pdf`); both are covered by `tests/static-shell.test.js`.
+
+### TODO-029 — Attach images to outline sections — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P2
+- **Work:** Store `links.images` (relative paths) on an outline item. The
+  image viewer attaches the previewed image to a chosen section, the outline
+  row shows an image badge with resolved thumbnails when the folder is loaded,
+  and an unloaded attachment is reported as unresolved instead of silently
+  dropped.
+- **Done when:** Attaching an image survives a restart and resolves once the
+  same folder is selected again.
+- **Evidence:** `attachImageToToc()` from the lightbox records relative paths,
+  `openLinkedImages()` resolves them or reports unresolved attachments, and
+  the outline row renders an `IMG n` badge.
+
+### TODO-030 — Import extracted PDF headings into the declared outline — DONE
+
+- **Intent:** I1.5, I1.2, I4.4
+- **Priority:** P2
+- **Work:** Add one action in the PDF sidepanel that converts the headings
+  from `extractPdfToc` into declared outline items, preserving level and page
+  links, without changing the native extraction contract.
+- **Done when:** A PDF's structure becomes the writable outline in one action,
+  and re-running the import cannot duplicate existing headings.
+- **Evidence:** `importPdfHeadingsToToc()` converts `extractPdfToc` headings
+  into items, keeps level and page links, and skips titles already declared.
+
+### TODO-031 — Restore the last PDF and image session after restart — DONE
+
+- **Intent:** I2.5, I1.3
+- **Priority:** P1
+- **Work:** Persist document name, size, `file://` source, page, and zoom, plus
+  the image directory name and selected group. On boot, attempt to re-open the
+  PDF source and land on the saved page; on failure show a precise re-open
+  prompt. Report unresolved image attachments after a restart.
+- **Done when:** A restart returns the reader to the same page when the source
+  is still reachable, and degrades to an explicit prompt when it is not.
+- **Evidence:** `setPdfDocument()` records name, size, `file://` source URL,
+  document id, page, and zoom; `resumePdfSession()` runs on boot and when the
+  PDF view opens, with an explicit `Resume session` button and status text when
+  the source is unreachable. TODO-032 stays open for the native fallback.
+
+### TODO-033 — Persist the workspace through the native host — DONE
+
+- **Intent:** I2.5, I1.3, I4.4
+- **Priority:** P1
+- **Work:** WebView storage never reaches disk in the default inline render
+  mode, so closing the app dropped every state. Move durability into C: a
+  tested file store, `loadWorkspace`/`saveWorkspace` bindings, and a frontend
+  that hydrates from disk on boot while keeping `localStorage` as the
+  synchronous cache, with `savedAt` resolving conflicts.
+- **Done when:** Closing and reopening the app restores the last view,
+  outline, drafts, PDF position, and image selection regardless of render mode.
+- **Evidence:** `src/workspace_store.c` with `tests/test_workspace_store.c`
+  (34 frontend tests plus C and sanitizer runs), bindings in
+  `src/webview_app.c`, and the hydration path in `App.vue`.
+
+### TODO-032 — Add a native recent-document command if URL restore proves unreliable
+
+- **Intent:** I1.2, I3.3, I4.4
+- **Priority:** P3
+- **Work:** Only if the frontend `file://` restore path is blocked by WebView
+  origin rules: store the last accepted path natively, expose a
+  `restorePdf` binding that re-runs the existing validation, and document it
+  in the bridge protocol with tests.
+- **Done when:** The reader can re-open its last document without user
+  interaction, or the TODO is closed with evidence that the frontend path is
+  sufficient.
 
 ## Backlog rules
 

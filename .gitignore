@@ -11,6 +11,11 @@
 /frontend-octane/.rsbuild-cache/
 /frontend-octane/.turbo/
 
+/frontend-vue/dist/
+/frontend-vue/node_modules/
+/frontend-vue/.rsbuild-cache/
+/frontend-vue/.rspack-profile-*/
+
 # Package-manager and tool caches
 .npm/
 .pnpm-store/

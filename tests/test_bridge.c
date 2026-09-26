@@ -42,6 +42,17 @@ int main(void) {
     assert(err == BRIDGE_OK);
     assert_contains(response, "\"count\":2");
 
+    /* Newlines as separators between numbers */
+    err = summarize_request("[[1\n2\n3]]", response, sizeof(response));
+    assert(err == BRIDGE_OK);
+    assert_contains(response, "\"count\":3");
+    assert_contains(response, "\"mean\":2");
+
+    /* Mixed commas and newlines */
+    err = summarize_request("[[1, 2\n3, 4\n5]]", response, sizeof(response));
+    assert(err == BRIDGE_OK);
+    assert_contains(response, "\"count\":5");
+
     /* Single value */
     err = summarize_request("[[42]]", response, sizeof(response));
     assert(err == BRIDGE_OK);

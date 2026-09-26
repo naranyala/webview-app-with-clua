@@ -9,6 +9,9 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_program(NPM_EXECUTABLE npm REQUIRED)
+find_program(PDFTOTEXT_EXECUTABLE pdftotext REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -22,27 +25,36 @@ FetchContent_MakeAvailable(webview)
 add_executable(metrics_desktop
   src/webview_app.c
   src/webview_bridge.c
+  src/workspace_store.c
   src/metrics.c
 )
 
 target_include_directories(metrics_desktop PRIVATE include)
-target_link_libraries(metrics_desktop PRIVATE webview::core_static)
-set(FRONTEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend-octane")
+target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK)
+set(FRONTEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend-vue")
 set(FRONTEND_HTML "${FRONTEND_DIR}/dist/index.html")
 set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/src/index.js"
-  "${FRONTEND_DIR}/src/App.tsrx"
-  "${FRONTEND_DIR}/src/App.css"
+  "${FRONTEND_DIR}/src/App.vue"
+  "${FRONTEND_DIR}/src/index.css"
   "${FRONTEND_DIR}/src/metrics-ui.js"
+  "${FRONTEND_DIR}/src/image-viewer.js"
+  "${FRONTEND_DIR}/src/pdf-compat.js"
+  "${FRONTEND_DIR}/src/workspace.js"
   "${FRONTEND_DIR}/public/index.html"
   "${FRONTEND_DIR}/rsbuild.config.js"
   "${FRONTEND_DIR}/plugins/single-file-html.js"
+  "${FRONTEND_DIR}/tests/metrics-ui.test.js"
+  "${FRONTEND_DIR}/tests/image-viewer.test.js"
+  "${FRONTEND_DIR}/tests/static-shell.test.js"
+  "${FRONTEND_DIR}/tests/workspace.test.js"
   "${FRONTEND_DIR}/package.json"
   "${FRONTEND_DIR}/package-lock.json"
 )
 
 target_compile_definitions(metrics_desktop PRIVATE
   APP_HTML_PATH="${FRONTEND_HTML}"
+  PDFTOTEXT_EXECUTABLE="${PDFTOTEXT_EXECUTABLE}"
   METRICS_ENABLE_DEVTOOLS=$<BOOL:${METRICS_ENABLE_DEVTOOLS}>
 )
 

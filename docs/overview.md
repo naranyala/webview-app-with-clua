@@ -15,21 +15,26 @@ population variance (`M2 / count`, not sample variance).
 
 ## User experience
 
-The desktop UI starts with example values in a bare-minimum text editor. A user
-can replace them, select **Run metrics** from the top toolbar or right-side
-vertical toolbar, and inspect the native summary in the output panel. The
-frontend shows a loading state while the request crosses the WebView bridge,
-then renders the native summary or a useful error.
+The desktop UI opens on a workspace menu with four tools. The writing flow
+starts in **TOC Manager**, where a user declares outline items (title plus
+level). Selecting an item opens the **Text Editor** bound to that heading: the
+draft is restored, autosaved on every keystroke, and the top bar moves between
+neighbouring outline items. All four cards share one persisted record —
+written by the native host to `native-workspace/workspace.json`, with
+`localStorage` as a boot cache — so the menu badges show live state, outline
+items can link to PDF pages and attached images, and a restart restores the
+last view, outline, buffer, and reading position.
 
-The ordinary frontend development server is useful for layout work, but it
-does not provide the native bridge. In that mode, submitting the form reports
-that the desktop bridge is unavailable.
+The native `summarize` binding is still registered by the C host and covered by
+the bridge tests, but the current UI no longer renders the metrics form; the
+frontend keeps its parsing helpers in `src/metrics-ui.js` for later reuse.
 
 ## Scope
 
 This repository demonstrates a narrow integration pattern rather than a
-general-purpose analytics product. It does not currently provide persistence,
-accounts, network services, a local HTTP server, or a plugin system.
+general-purpose analytics product. Workspace persistence is a local JSON file
+under the user's data directory; there are no accounts, network services, a
+local HTTP server, or a plugin system.
 
 ## Current implementation status
 

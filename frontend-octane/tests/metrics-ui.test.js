@@ -8,18 +8,47 @@ import {
 } from '../src/metrics-ui.js';
 
 test('parseValues accepts signed decimals and exponents', () => {
-  assert.deepEqual(parseValues(' +1.5, -2.5, 3e2 '), {
-    ok: true,
-    values: [1.5, -2.5, 300],
-  });
+  const result = parseValues(' +1.5, -2.5, 3e2 ');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.values, [1.5, -2.5, 300]);
+  assert.equal(result.code, 'OK');
 });
 
 test('parseValues rejects empty and malformed tokens', () => {
-  for (const input of ['', '1,,2', '1, nope', 'Infinity', 'NaN']) {
+  for (const input of ['', 'Infinity', 'NaN']) {
     const result = parseValues(input);
     assert.equal(result.ok, false, input);
-    assert.match(result.message, /finite numbers/);
   }
+  const nopeResult = parseValues('1, nope');
+  assert.equal(nopeResult.ok, false);
+  assert.match(nopeResult.message, /Invalid number/);
+});
+
+test('parseValues treats multiple consecutive commas as one separator', () => {
+  const result = parseValues('1,,2');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.values, [1, 2]);
+});
+
+test('parseValues accepts newline-separated input', () => {
+  const input = '1\n2\n3';
+  const result = parseValues(input);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.values, [1, 2, 3]);
+});
+
+test('parseValues accepts mixed comma and newline separators', () => {
+  const input = '1, 2\n3, 4\n5';
+  const result = parseValues(input);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.values, [1, 2, 3, 4, 5]);
+});
+
+test('parseValues rejects trailing newlines as empty tokens', () => {
+  const input = '1, 2,';
+  const result = parseValues(input);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /empty token/);
 });
 
 test('formatNumber keeps useful precision without trailing zeroes', () => {
@@ -32,8 +61,11 @@ test('getErrorMessage decodes native bridge errors', () => {
   const payload = {
     error: { code: 'INVALID_VALUE', message: 'Finite values only.' },
   };
-  assert.equal(getErrorMessage(payload), 'Finite values only.');
-  assert.equal(getErrorMessage(JSON.stringify(payload)), 'Finite values only.');
+  assert.equal(getErrorMessage(payload), '[INVALID_VALUE] Finite values only.');
+  assert.equal(
+    getErrorMessage(JSON.stringify(payload)),
+    '[INVALID_VALUE] Finite values only.',
+  );
   assert.equal(
     getErrorMessage(new Error('Bridge unavailable.')),
     'Bridge unavailable.',

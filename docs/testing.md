@@ -32,6 +32,24 @@ Run:
 make bridge-test
 ```
 
+### Workspace store tests
+
+[`tests/test_workspace_store.c`](../tests/test_workspace_store.c) covers the
+file-backed workspace used for restart persistence: a missing file reads as
+empty state, save/load round trips preserve UTF-8 and escapes, oversized
+payloads are rejected, writes are atomic, JSON object detection guards the
+response shape, and binding argument decoding handles escapes, Unicode
+(including surrogate pairs), and malformed request lists.
+
+Run:
+
+```sh
+make workspace-test
+```
+
+The sanitized target rebuilds it with AddressSanitizer and
+UndefinedBehaviorSanitizer as well.
+
 ### Lua integration tests
 
 [`tests/test_core.lua`](../tests/test_core.lua) verifies that the Lua wrapper
@@ -63,7 +81,7 @@ The frontend has pure behavior tests for input parsing, bridge error decoding,
 number formatting, and result rendering. They run without a browser or WebView:
 
 ```sh
-cd frontend-octane
+cd frontend-vue
 npm test
 npm run check
 npm run build
@@ -76,15 +94,13 @@ The native bridge itself remains covered by `make bridge-test`.
 With Lua installed:
 
 ```sh
-make test
-make sanitized-test
-cd frontend-octane && npm run check && npm run build
+lua build.lua test
 ```
 
 For the complete desktop path, also run:
 
 ```sh
-make desktop
+lua build.lua desktop
 ```
 
 Then enter valid, invalid, empty, and very large values in the UI.

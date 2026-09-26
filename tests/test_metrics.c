@@ -95,6 +95,39 @@ int main(void) {
     metrics_reset(engine);
     assert(metrics_get_summary(engine, &result) == METRICS_ERR_EMPTY);
 
+    /* Lifecycle: operations after destroy are safe (NULL engine) */
+    assert(metrics_add(NULL, 1.0) == METRICS_ERR_NULL_ENGINE);
+    assert(metrics_get_summary(NULL, &result) == METRICS_ERR_NULL_ENGINE);
+    metrics_reset(NULL);
+
+    /* Lifecycle: reset clears state, subsequent add works */
+    metrics_reset(engine);
+    assert(metrics_add(engine, 10.0) == METRICS_OK);
+    assert(metrics_get_summary(engine, &result) == METRICS_OK);
+    assert(result.count == 1);
+    assert_close(result.mean, 10.0, 1e-12);
+
+    /* Lifecycle: multiple reset cycles */
+    for (int i = 0; i < 5; i++) {
+        metrics_reset(engine);
+        assert(metrics_add(engine, (double)i) == METRICS_OK);
+        assert(metrics_get_summary(engine, &result) == METRICS_OK);
+        assert(result.count == 1);
+    }
+
+    /* Lifecycle: many adds then reset then add */
+    metrics_reset(engine);
+    for (int i = 0; i < 1000; i++) {
+        assert(metrics_add(engine, 1.0) == METRICS_OK);
+    }
+    assert(metrics_get_summary(engine, &result) == METRICS_OK);
+    assert(result.count == 1000);
+    metrics_reset(engine);
+    assert(metrics_add(engine, 42.0) == METRICS_OK);
+    assert(metrics_get_summary(engine, &result) == METRICS_OK);
+    assert(result.count == 1);
+    assert_close(result.mean, 42.0, 1e-12);
+
     metrics_destroy(engine);
     return 0;
 }

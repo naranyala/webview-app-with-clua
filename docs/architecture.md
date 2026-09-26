@@ -47,18 +47,27 @@ creates the WebView, binds `summarize`, and runs the event loop. It does not
 embed Lua. The CMake desktop target links the metrics core and bridge parser
 directly.
 
+### Workspace store
+
+[`src/workspace_store.c`](../src/workspace_store.c) owns durable frontend state.
+It reads and writes `g_get_user_data_dir()/native-workspace/workspace.json`
+through a temporary file and an atomic rename, enforces a 4 MiB payload cap,
+and decodes the `saveWorkspace` binding argument. The host exposes it as the
+`loadWorkspace` and `saveWorkspace` bindings; WebView storage is only a
+synchronous boot cache because the inline render mode never persists it.
+
 ### Frontend
 
-[`frontend-octane/src/App.tsrx`](../frontend-octane/src/App.tsrx) owns input
-parsing, loading/error states, and result presentation. It does not calculate
-metrics itself. The production build inlines its assets into
-`frontend-octane/dist/index.html`.
+[`frontend-vue/src/App.vue`](../frontend-vue/src/App.vue) owns reactive view
+switching, input parsing, loading/error states, PDF/TOC presentation, and result
+rendering. It does not calculate metrics itself. The production build inlines
+its assets into `frontend-vue/dist/index.html`.
 
 ## Runtime sequence
 
 1. CMake runs the frontend build.
 2. The WebView host reads the generated `index.html` into memory.
-3. Octane renders the metrics form.
+3. Vue renders the workspace menu and selected tool.
 4. The user submits comma-separated values.
 5. The frontend calls `window.summarize(values)`.
 6. WebView serializes the argument list and invokes the C callback.

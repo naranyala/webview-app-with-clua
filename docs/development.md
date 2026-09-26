@@ -21,6 +21,7 @@ For the desktop path:
 - C++ compiler
 - GTK 3 development files
 - WebKitGTK 4.1 development files
+- Poppler command-line tools (`pdftotext`) for heading extraction
 - network access for the first WebView dependency fetch, unless cached
 
 For the frontend:
@@ -32,32 +33,43 @@ On Debian/Ubuntu, a typical native setup is:
 
 ```sh
 sudo apt install build-essential cmake g++ pkg-config \
-  lua5.4 liblua5.4-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+  lua5.4 liblua5.4-dev libgtk-3-dev libwebkit2gtk-4.1-dev poppler-utils
 ```
 
 ## Install frontend dependencies
 
 ```sh
-cd frontend-octane
+cd frontend-vue
 npm install
 cd ..
 ```
 
-## Common commands
+## Main build system
 
-| Command | Purpose |
-| --- | --- |
-| `make run` | Build the Lua module and run the Lua demo. |
-| `make core-test` | Build and run C engine tests. |
-| `make bridge-test` | Build and run bridge parser tests. |
-| `make test` | Run C, bridge, and Lua tests. |
-| `make sanitized-test` | Run C and bridge tests with ASan/UBSan. |
-| `make desktop` | Build the frontend and native WebView app, then launch it. |
-| `./run.sh` | Equivalent desktop launcher using an explicit project path. |
-| `npm run build` | Build the standalone frontend HTML. |
-| `npm run dev` | Start the frontend development server. |
-| `npm run check` | Run Biome checks. |
-| `make clean` | Remove generated native build output. |
+[`build.lua`](../build.lua) is the project-wide build orchestrator. It installs
+frontend dependencies when needed, builds the Lua native module, configures and
+builds the CMake WebView desktop target, and exposes test and cleanup commands.
+[`run.sh`](../run.sh) delegates to it.
+
+```sh
+lua build.lua all          # native module + Vue desktop application
+lua build.lua desktop      # Vue frontend + native WebView executable
+lua build.lua native       # Lua native module compiled through build.lua
+lua build.lua c-tests      # compile standalone C test executables
+lua build.lua frontend     # Vue single-file HTML only
+lua build.lua test         # frontend, C, Lua, bridge, and sanitizer tests
+lua build.lua doctor       # report required tool availability
+lua build.lua clean        # remove build output
+./run.sh                   # build everything and launch the desktop app
+```
+
+The Lua build helpers in `build.lua` can compile future C shared libraries
+and executables with reusable include paths, defines, compiler flags, libraries,
+and pkg-config dependencies. The existing Lua module and standalone C tests
+use those helpers.
+
+Override `BUILD_TYPE`, `METRICS_ENABLE_DEVTOOLS`, `METRICS_RENDER_MODE`, `LUA`,
+or `LUA_PKG` through the environment when needed.
 
 The sanitizer target defaults to Clang because some GCC installations do not
 ship a usable sanitizer runtime. Override it with `SANITIZER_CC=...`.
@@ -78,7 +90,7 @@ bundle, and native objects when their inputs have not changed. The frontend is
 rebuilt only when one of its source, configuration, or package files changes.
 
 `run.sh` builds the frontend and the desktop host loads the contents of the
-generated `frontend-octane/dist/index.html` directly into WebView. No frontend
+generated `frontend-vue/dist/index.html` directly into WebView. No frontend
 server is required. This is the default because it reliably executes the
 bundled script in WebKit. To force local-file navigation instead, use:
 
@@ -97,9 +109,10 @@ Generated artifacts are under ignored paths:
 - `build/native/metrics.so` — Lua native module.
 - `build/test_metrics` — C engine test executable.
 - `build/test_bridge` — bridge parser test executable.
+- `build/test_workspace_store` — workspace store test executable.
 - `build/sanitized/` — sanitizer test executables.
 - `build/desktop/bin/metrics_desktop` — desktop application.
-- `frontend-octane/dist/index.html` — self-contained frontend artifact.
+- `frontend-vue/dist/index.html` — self-contained Vue frontend artifact.
 
 ## Troubleshooting
 

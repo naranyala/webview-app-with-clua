@@ -11,6 +11,13 @@ static const char *skip_space(const char *cursor) {
     return cursor;
 }
 
+static int has_newline(const char *from, const char *to) {
+    for (const char *p = from; p < to; p++) {
+        if (*p == '\n' || *p == '\r') return 1;
+    }
+    return 0;
+}
+
 static int write_error(char *response, size_t response_size, const char *code, const char *message) {
     int written = snprintf(response, response_size,
                             "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
@@ -42,17 +49,25 @@ static bridge_error parse_number_array(const char **cursor_ref, metrics_engine *
         char *end;
         double value;
         metrics_error merr;
+        const char *before_space;
 
+        /* Skip whitespace including newlines */
+        before_space = cursor;
         cursor = skip_space(cursor);
 
         /* Check for end of array */
         if (*cursor == ']') break;
 
-        /* If not the first element, expect a comma separator */
+        /* If not the first element, expect a comma or newline separator */
         if (!first) {
-            if (*cursor != ',') return BRIDGE_ERR_MALFORMED_REQUEST;
-            cursor++;
-            cursor = skip_space(cursor);
+            if (*cursor == ',') {
+                cursor++;
+                cursor = skip_space(cursor);
+            } else if (!has_newline(before_space, cursor)) {
+                /* No comma and no newline — missing separator */
+                return BRIDGE_ERR_MALFORMED_REQUEST;
+            }
+            /* Newline was present — valid implicit separator */
         }
         first = 0;
 

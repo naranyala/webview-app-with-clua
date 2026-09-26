@@ -51,6 +51,18 @@ Lua remains the scripting/integration surface for programmatic workflows, and
 WebView remains the desktop presentation surface. They may share the C core,
 but neither should be accidentally presented as the other.
 
+### I1.5 — Treat the four menu tools as one workspace
+
+The Text Editor, TOC Manager, PDF Reader, and Image Viewer are not isolated
+screens. They share one persisted workspace: the declared outline and its
+drafts, the last view, the open document session, and the selected image
+folder all survive a restart, and any tool may reference content owned by
+another (an outline item pointing at a PDF page or an attached image).
+
+**Success looks like:** a contributor can point at one store that owns the
+cross-tool state, and a user can move from outline to source document and back
+without re-declaring or re-losing anything.
+
 ## I2 — User intents
 
 ### I2.1 — A user can calculate metrics from the desktop UI
@@ -72,6 +84,12 @@ and avoid presenting a partial or stale result as current.
 
 The README, build targets, tests, and source layout should agree on the
 supported workflows.
+
+### I2.5 — A user does not lose work when switching tools or restarting
+
+Selecting an outline item, writing a section, attaching a source document or
+image, and reopening the application must keep the outline, the drafts, and
+the session context intact instead of resetting to an empty shell.
 
 ## I3 — System intents
 

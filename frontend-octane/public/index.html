@@ -3,51 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Native Text Editor</title>
+    <title>Native Workspace</title>
   </head>
-  <body>
+  <body data-view="menu">
     <div id="root">
-      <main class="editor-app">
-        <header class="topbar">
+      <main class="app-shell">
+        <header class="launcher-header">
           <div class="brand">
             <span class="brand-mark">N</span>
-            <span class="brand-name">Plaintext</span>
+            <div><span class="brand-name">Native Workspace</span><span class="brand-subtitle">Local tools, one workspace</span></div>
           </div>
-          <div class="document-title" aria-live="polite">untitled.txt</div>
-          <div class="top-actions">
-            <button class="toolbar-button subtle" id="new-document" type="button">New</button>
-            <button class="toolbar-button subtle" id="copy-result" type="button">Copy</button>
-            <button class="toolbar-button subtle" id="export-history" type="button">Export</button>
-            <button class="toolbar-button primary" id="calculate" type="button">Run metrics</button>
-          </div>
+          <button class="toolbar-button subtle" id="back-to-menu" type="button">All apps</button>
         </header>
 
-        <div class="editor-layout">
-          <section class="editor-pane" aria-label="Text editor">
-            <div class="editor-meta">
-              <span>INPUT</span>
-              <span id="cursor-position">Line 1, Col 1</span>
+        <section class="app-menu" data-view="menu" aria-label="Application menu">
+          <div class="menu-heading">
+            <span>APPLICATIONS</span>
+            <h1>What would you like to open?</h1>
+            <p>Choose a local tool to get started.</p>
+          </div>
+          <div class="app-grid">
+            <button class="app-card" data-app="editor" type="button">
+              <span class="app-icon text-icon" aria-hidden="true">Aa</span>
+              <span class="app-card-copy"><strong>Text Editor</strong><small>Edit text and run native metrics</small></span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+            <button class="app-card" data-app="pdf" type="button">
+              <span class="app-icon pdf-icon" aria-hidden="true">PDF</span>
+              <span class="app-card-copy"><strong>PDF Reader</strong><small>Open a PDF from your local system</small></span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="editor-app" data-view="editor" aria-label="Text editor application" hidden>
+          <header class="topbar">
+            <div class="brand"><span class="brand-mark">N</span><span class="brand-name">Plaintext</span></div>
+            <div class="document-title" aria-live="polite">untitled.txt</div>
+            <div class="top-actions">
+              <button class="toolbar-button subtle" id="new-document" type="button">New</button>
+              <button class="toolbar-button subtle" id="copy-result" type="button">Copy</button>
+              <button class="toolbar-button subtle" id="export-history" type="button">Export</button>
+              <button class="toolbar-button primary" id="calculate" type="button">Run metrics</button>
             </div>
-            <label class="sr-only" for="values">Document text</label>
-            <textarea id="values" spellcheck="false" aria-describedby="editor-help">12.5, 15, 8.5, 14</textarea>
-            <div class="editor-footer">
-              <span id="editor-help">Comma-separated numbers are sent to the native C engine.</span>
-              <span id="document-status">Ready</span>
-            </div>
+          </header>
+          <div class="editor-layout">
+            <section class="editor-pane" aria-label="Text editor">
+              <div class="editor-meta"><span>INPUT</span><span id="cursor-position">Line 1, Col 1</span></div>
+              <label class="sr-only" for="values">Document text</label>
+              <textarea id="values" spellcheck="false" aria-describedby="editor-help">12.5, 15, 8.5, 14</textarea>
+              <div class="editor-footer"><span id="editor-help">Comma-separated numbers are sent to the native C engine.</span><span id="document-status">Ready</span></div>
+            </section>
+            <aside class="right-toolbar" aria-label="Editor tools">
+              <button class="rail-button active" id="tool-edit" type="button" aria-label="Edit document" title="Edit document"><span aria-hidden="true">✎</span></button>
+              <button class="rail-button" id="tool-run" type="button" aria-label="Run metrics" title="Run metrics"><span aria-hidden="true">▶</span></button>
+              <button class="rail-button" id="tool-clear" type="button" aria-label="Clear document" title="Clear document"><span aria-hidden="true">⌫</span></button>
+              <div class="rail-spacer"></div>
+              <button class="rail-button" id="tool-info" type="button" aria-label="Show help" title="Show help"><span aria-hidden="true">?</span></button>
+            </aside>
+          </div>
+          <section id="result" class="result-panel" aria-live="polite" aria-label="Metrics result">
+            <div class="result-heading"><span>OUTPUT</span><span>No result yet</span></div>
+            <p class="placeholder">Run metrics to inspect the native calculation.</p>
           </section>
+        </section>
 
-          <aside class="right-toolbar" aria-label="Editor tools">
-            <button class="rail-button active" id="tool-edit" type="button" aria-label="Edit document" title="Edit document"><span aria-hidden="true">✎</span></button>
-            <button class="rail-button" id="tool-run" type="button" aria-label="Run metrics" title="Run metrics"><span aria-hidden="true">▶</span></button>
-            <button class="rail-button" id="tool-clear" type="button" aria-label="Clear document" title="Clear document"><span aria-hidden="true">⌫</span></button>
-            <div class="rail-spacer"></div>
-            <button class="rail-button" id="tool-info" type="button" aria-label="Show help" title="Show help"><span aria-hidden="true">?</span></button>
+        <section class="pdf-app" data-view="pdf" aria-label="PDF reader application" hidden>
+          <header class="pdf-toolbar">
+            <div><span class="pdf-eyebrow">PDF READER</span><strong id="pdf-name">No document selected</strong></div>
+            <div class="pdf-actions">
+              <span id="pdf-status" class="pdf-status" aria-live="polite">Choose a PDF from your system to begin reading.</span>
+              <button class="toolbar-button primary" id="open-pdf" type="button">Open PDF</button>
+            </div>
+          </header>
+          <aside class="toc-sidebar" aria-label="Document table of contents">
+            <div class="toc-heading"><span>CONTENTS</span><strong id="toc-count">No headings yet</strong></div>
+            <nav id="toc-panel" class="toc-panel" aria-live="polite"><p class="toc-message">Open a PDF to build its table of contents.</p></nav>
           </aside>
-        </div>
-
-        <section id="result" class="result-panel" aria-live="polite" aria-label="Metrics result">
-          <div class="result-heading"><span>OUTPUT</span><span id="result-status">No result yet</span></div>
-          <p class="placeholder">Run metrics to inspect the native calculation.</p>
+          <div class="pdf-content">
+            <input id="pdf-file-input" class="sr-only" type="file" accept="application/pdf,.pdf" />
+            <div class="pdf-empty" id="pdf-empty">
+              <span class="pdf-large-icon" aria-hidden="true">PDF</span>
+              <h2>Read a local PDF</h2>
+              <p>Use the system file picker to securely open a document from this computer.</p>
+              <button class="toolbar-button primary" id="browse-pdf" type="button">Browse files</button>
+            </div>
+            <object id="pdf-viewer" class="pdf-viewer" type="application/pdf" aria-label="Selected PDF document" hidden><p>Your system cannot display this PDF.</p></object>
+          </div>
         </section>
       </main>
     </div>
