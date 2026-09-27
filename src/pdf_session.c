@@ -96,13 +96,15 @@ static const picker_filter pdf_picker_filter = {
 };
 
 /*
- * Runs on the GTK main loop after dispatch_picker(). Validates the choice,
- * builds a file:// URL (or an inline data URL for files up to 32 MiB), stores
- * the document identity on app_context, and answers the pending request.
+ * Validates a chosen document, builds a file:// URL (or an inline data URL for
+ * files up to 32 MiB), stores the document identity on app_context, and answers
+ * the pending request. Shared by the chooser and the path-binding so both
+ * entry points reject the same files and report the same errors.
+ *
+ * path is borrowed; every early return below reports the failure itself.
  */
-static void show_pdf_picker(webview_t view, void *argument) {
-    picker_request *request = argument;
-    char *selected_path = run_path_chooser(view, PICKER_OPEN_FILE, "Open PDF", &pdf_picker_filter, NULL);
+static void answer_pdf_document(webview_t view, const char *request_id,
+        app_context *app, const char *path) {
     long long size = 0;
     char *file_name = NULL;
     char *file_contents = NULL;
@@ -112,34 +114,28 @@ static void show_pdf_picker(webview_t view, void *argument) {
     char *url = NULL;
     GString *response = NULL;
 
-    if (selected_path == NULL) {
-        char canceled[] = "{\"canceled\":true}";
-        webview_return(view, request->request_id, 0, canceled);
-        goto cleanup;
-    }
-
-    if (!is_valid_pdf(selected_path, &size)) {
-        return_native_error(view, request->request_id, "INVALID_PDF",
+    if (!is_valid_pdf(path, &size)) {
+        return_native_error(view, request_id, "INVALID_PDF",
             "The selected file is not a readable PDF document.");
-        goto cleanup;
+        return;
     }
 
     url = calloc(PATH_MAX * 3 + 8, 1);
-    if (url == NULL || !build_file_url(selected_path, url, (size_t)PATH_MAX * 3 + 8)) {
-        return_native_error(view, request->request_id, "PDF_TOO_LARGE",
+    if (url == NULL || !build_file_url(path, url, (size_t)PATH_MAX * 3 + 8)) {
+        return_native_error(view, request_id, "PDF_TOO_LARGE",
             "The selected PDF path is too long to open.");
         goto cleanup;
     }
 
-    file_name = g_path_get_basename(selected_path);
-    fingerprint = create_pdf_fingerprint(selected_path, size);
+    file_name = g_path_get_basename(path);
+    fingerprint = create_pdf_fingerprint(path, size);
     if (fingerprint == NULL) {
-        return_native_error(view, request->request_id, "INTERNAL_ERROR",
+        return_native_error(view, request_id, "INTERNAL_ERROR",
             "The selected PDF identity could not be prepared.");
         goto cleanup;
     }
     if (size <= 32LL * 1024LL * 1024LL &&
-        g_file_get_contents(selected_path, &file_contents, &file_length, NULL)) {
+        g_file_get_contents(path, &file_contents, &file_length, NULL)) {
         char *encoded = g_base64_encode((const guchar *)file_contents, file_length);
         if (encoded != NULL) {
             data_url = g_strdup_printf("data:application/pdf;base64,%s", encoded);
@@ -148,24 +144,27 @@ static void show_pdf_picker(webview_t view, void *argument) {
     }
     response = g_string_new(NULL);
     if (response == NULL) {
-        return_native_error(view, request->request_id, "INTERNAL_ERROR",
+        return_native_error(view, request_id, "INTERNAL_ERROR",
             "The selected PDF could not be prepared for rendering.");
         goto cleanup;
     }
-    app_context *app = request->app;
     g_free(app->pdf_path);
     g_free(app->pdf_id);
     g_free(app->pdf_fingerprint);
-    app->pdf_path = g_strdup(selected_path);
+    app->pdf_path = g_strdup(path);
     app->pdf_id = g_strdup(fingerprint);
     app->pdf_fingerprint = g_strdup(fingerprint);
     /*
      * Built with the shared JSON writer into a growable buffer: the old
      * snprintf into a fixed buffer could deliver a truncated body with status
      * 0, and its 4 KiB escaper could silently cut a long file:// URL.
+     * "path" is what the webview records in its recent-documents history, so a
+     * remembered entry can be re-opened without the chooser.
      */
     g_string_append(response, "{\"name\":");
     json_append_string(response, file_name);
+    g_string_append(response, ",\"path\":");
+    json_append_string(response, path);
     g_string_append_printf(response, ",\"size\":%lld,\"url\":", size);
     json_append_string(response, url);
     g_string_append(response, ",\"dataUrl\":");
@@ -173,17 +172,78 @@ static void show_pdf_picker(webview_t view, void *argument) {
     g_string_append(response, ",\"documentId\":");
     json_append_string(response, fingerprint);
     g_string_append_c(response, '}');
-    webview_return(view, request->request_id, 0, response->str);
+    webview_return(view, request_id, 0, response->str);
 
 cleanup:
-    free(selected_path);
-    free(file_name);
+    g_free(file_name);
     g_free(file_contents);
     g_free(data_url);
     g_free(fingerprint);
     free(url);
     if (response != NULL) g_string_free(response, TRUE);
+}
+
+/*
+ * Runs on the GTK main loop after dispatch_picker(): ask for a document, then
+ * hand the choice to the shared answer path.
+ */
+static void show_pdf_picker(webview_t view, void *argument) {
+    picker_request *request = argument;
+    char *selected_path = run_path_chooser(view, PICKER_OPEN_FILE, "Open PDF", &pdf_picker_filter, NULL);
+
+    if (selected_path == NULL) {
+        char canceled[] = "{\"canceled\":true}";
+        webview_return(view, request->request_id, 0, canceled);
+    } else {
+        answer_pdf_document(view, request->request_id, request->app, selected_path);
+    }
+    free(selected_path);
     picker_request_release(request);
+}
+
+/*
+ * Runs on the GTK main loop after dispatch_picker_with_payload(): open the
+ * document the webview named, with no chooser. The path is decoded through the
+ * shared JSON codec, so it is validated exactly like any other binding payload,
+ * and must be absolute - a relative path would silently resolve against the
+ * host's working directory.
+ */
+static void open_pdf_at_path(webview_t view, void *argument) {
+    picker_request *request = argument;
+    char *values[1] = { NULL };
+    json_result decoded = request->payload == NULL
+        ? JSON_ERR_NULL
+        : json_read_string_array(request->payload, 1, values, NULL);
+
+    if (decoded != JSON_OK) {
+        return_native_error(view, request->request_id, "INVALID_PATH",
+            "The document path could not be read.");
+    } else if (!g_path_is_absolute(values[0])) {
+        return_native_error(view, request->request_id, "INVALID_PATH",
+            "The document path must be absolute.");
+    } else {
+        answer_pdf_document(view, request->request_id, request->app, values[0]);
+    }
+    json_free_values(values, 1);
+    picker_request_release(request);
+}
+
+void on_open_pdf_at(const char *id, const char *request, void *argument) {
+    app_context *app = argument;
+    char *payload = NULL;
+
+    if (request == NULL) {
+        return_native_error(app->view, id, "INVALID_PATH",
+            "The document path could not be read.");
+        return;
+    }
+    payload = g_strdup(request);
+    if (payload == NULL) {
+        return_native_error(app->view, id, "INTERNAL_ERROR",
+            "The document request could not be prepared.");
+        return;
+    }
+    dispatch_picker_with_payload(app, id, open_pdf_at_path, "PDF request", payload);
 }
 
 void on_open_pdf(const char *id, const char *request, void *argument) {

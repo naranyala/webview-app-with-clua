@@ -1,10 +1,11 @@
 /*
  * TOC Manager session: the outline itself and the actions that bind it to the
- * other tools (drafts in the editor, pages in the reader, files in the viewer).
+ * other tools (drafts in the editor, pages in the reader, files in the viewer,
+ * a place on the map).
  *
  * The outline is the spine of the workspace, so this module reaches into the
- * sibling sessions to open a linked page or image. It never persists on its
- * own: App.vue injects the workspace writer, which keeps the dependency
+ * sibling sessions to open a linked page, image, or location. It never persists
+ * on its own: App.vue injects the workspace writer, which keeps the dependency
  * pointing one way (this module -> App) instead of forming a cycle.
  *
  * The sibling sessions arrive as factory arguments (defaulting to the app's own
@@ -23,6 +24,7 @@ import {
   withTextFileWrite,
 } from './file-io.js';
 import * as imageSession from './image-session.js';
+import * as mapSession from './map-explorer.js';
 import * as pdfSession from './pdf-session.js';
 import { clampLevel, createTocItem, MAX_IMAGES_PER_ITEM } from './workspace.js';
 
@@ -32,8 +34,8 @@ import { clampLevel, createTocItem, MAX_IMAGES_PER_ITEM } from './workspace.js';
  *
  * Like the other sessions this is a factory, so a test can hold two outlines at
  * once. It also takes the collaborators it used to import directly — the editor
- * session, the PDF and image sessions, the shell, and the boot snapshot — which
- * is what makes an isolated outline possible without module mocking.
+ * session, the PDF, image, and map sessions, the shell, and the boot snapshot —
+ * which is what makes an isolated outline possible without module mocking.
  * App.vue and the tests keep using the default instance exported below.
  */
 export function createTocOutline({
@@ -42,6 +44,7 @@ export function createTocOutline({
   shell = appShell,
   pdf = pdfSession,
   images = imageSession,
+  map = mapSession,
   doc = null,
   defer = nextTick,
   persist: persistNow = () => true,
@@ -60,11 +63,12 @@ export function createTocOutline({
     pdfDocument,
     pdfName,
     pdfPageNumber,
+    pdfPath,
     pdfStatus,
     pdfStatusError,
     setPdfStatus,
     navigateToPage,
-    resumePdfSession,
+    openPdfAt,
     tocHeadings,
     setTocMessage,
   } = pdf;
@@ -77,6 +81,7 @@ export function createTocOutline({
     openLightbox,
     setImageStatus,
   } = images;
+  const { mapPin, showMapLocation, setMapStatus } = map;
   const { read: readTransfer, write: writeTransfer } = transfer;
 
   /* --- outline state -------------------------------------------------------- */
@@ -615,12 +620,18 @@ export function createTocOutline({
     }
   }
 
-  /* Opens the reader on the page linked to an outline item. */
+  /*
+   * Opens the reader on the page linked to an outline item. The viewer no longer
+   * restores a document by itself, so a jump with nothing open re-opens the
+   * document the link came from - an explicit action, not a background restore.
+   */
   async function openLinkedPdfPage(item) {
     const page = item?.links?.pdfPage;
     if (!page) return;
     selectView('pdf');
-    if (!pdfDocument.value) await resumePdfSession();
+    if (!pdfDocument.value) {
+      if (pdfPath.value) await openPdfAt(pdfPath.value);
+    }
     if (pdfDocument.value) {
       navigateToPage(page);
     } else {
@@ -682,12 +693,51 @@ export function createTocOutline({
     );
   }
 
+  /* --- links to the map ------------------------------------------------------ */
+
+  /*
+   * Stores the explorer's current pin on the selected outline item.
+   *
+   * Unlike the image link, a location is self-contained: the record holds the
+   * coordinates themselves, so it resolves on any later launch without the
+   * original directory being re-selected. The label is copied alongside so a
+   * future reverse-geocoded name survives; nothing in the app sets one yet.
+   */
+  function attachLocationToToc() {
+    const target = linkTarget.value;
+    if (!target) {
+      setMapStatus('Select an outline item to attach this location to.', true);
+      return;
+    }
+    const pin = mapPin.value;
+    if (!pin) {
+      setMapStatus('Click the map to drop a pin before attaching it.', true);
+      return;
+    }
+    target.links.location = { ...pin };
+    target.updatedAt = Date.now();
+    if (saveTocItems()) {
+      setMapStatus(`Location attached to “${target.title}”.`);
+    }
+  }
+
+  /* Switches to the explorer and centres it on the item's saved place. */
+  function openLinkedLocation(item) {
+    const location = item?.links?.location;
+    if (!location) return;
+    selectView('map');
+    if (!showMapLocation(location)) {
+      setMapStatus('The saved location could not be read.', true);
+    }
+  }
+
   return {
     activeTocId,
     activeTocIndex,
     activeTocItem,
     addTocItem,
     attachImageToToc,
+    attachLocationToToc,
     attachPdfPageToToc,
     cancelTocEdit,
     configureTocOutline,
@@ -710,6 +760,7 @@ export function createTocOutline({
     moveTocItem,
     nextTocItem,
     openLinkedImages,
+    openLinkedLocation,
     openLinkedPdfPage,
     previousTocItem,
     removeTocItem,
@@ -744,6 +795,7 @@ export const activeTocIndex = outline.activeTocIndex;
 export const activeTocItem = outline.activeTocItem;
 export const addTocItem = outline.addTocItem;
 export const attachImageToToc = outline.attachImageToToc;
+export const attachLocationToToc = outline.attachLocationToToc;
 export const attachPdfPageToToc = outline.attachPdfPageToToc;
 export const cancelTocEdit = outline.cancelTocEdit;
 export const configureTocOutline = outline.configureTocOutline;
@@ -765,6 +817,7 @@ export const linkTargetId = outline.linkTargetId;
 export const moveTocItem = outline.moveTocItem;
 export const nextTocItem = outline.nextTocItem;
 export const openLinkedImages = outline.openLinkedImages;
+export const openLinkedLocation = outline.openLinkedLocation;
 export const openLinkedPdfPage = outline.openLinkedPdfPage;
 export const previousTocItem = outline.previousTocItem;
 export const removeTocItem = outline.removeTocItem;

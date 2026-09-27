@@ -9,8 +9,9 @@
  *   json_io.c             the single JSON writer and request reader
  *   app_support.c         error replies, file URLs, picker dispatch, chooser
  *   pdf_toc.c             PDF heading extraction, cache, serialization
- *   pdf_session.c         openPdf + extractPdfToc bindings
- *   image_directory.c     openImageDirectory binding
+ *   pdf_session.c         openPdf + openPdfAt + extractPdfToc bindings
+ *   image_directory.c     openImageDirectory + openImageDirectoryAt bindings
+ *   outline_pdf.c         chooseOutlineDirectory + renderOutlinePdf bindings
  *   smoke.c               smokeVerdict verdict reporting for the smoke runner
  *   workspace_bindings.c  loadWorkspace + saveWorkspace bindings
  *   text_transfer.c       openTextFile + saveTextFile bindings
@@ -21,6 +22,7 @@
 #include "app_support.h"
 #include "image_directory.h"
 #include "metrics.h"
+#include "outline_pdf.h"
 #include "pdf_session.h"
 #include "smoke.h"
 #include "text_transfer.h"
@@ -221,7 +223,19 @@ int main(void) {
     if (!check_webview_error("bind openPdf", webview_bind(app.view, "openPdf", on_open_pdf, &app)))
         goto fail;
 
+    if (!check_webview_error("bind openPdfAt", webview_bind(app.view, "openPdfAt", on_open_pdf_at, &app)))
+        goto fail;
+
     if (!check_webview_error("bind openImageDirectory", webview_bind(app.view, "openImageDirectory", on_open_image_directory, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind openImageDirectoryAt", webview_bind(app.view, "openImageDirectoryAt", on_open_image_directory_at, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind chooseOutlineDirectory", webview_bind(app.view, "chooseOutlineDirectory", on_choose_outline_directory, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind renderOutlinePdf", webview_bind(app.view, "renderOutlinePdf", on_render_outline_pdf, &app)))
         goto fail;
 
     if (!check_webview_error("bind extractPdfToc", webview_bind(app.view, "extractPdfToc", on_extract_pdf_toc, &app)))

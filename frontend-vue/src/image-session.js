@@ -11,6 +11,7 @@ import { restoredWorkspace } from './boot-state.js';
 import { withFileTransfer } from './file-io.js';
 import { groupImages, imagesFromFileList } from './image-viewer.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
+import { MAX_RECENT_PATHS } from './workspace.js';
 
 export function createImageSession({
   boot = restoredWorkspace,
@@ -29,6 +30,13 @@ export function createImageSession({
 
   const imageDirectoryInput = ref(null);
   const imageDirectoryName = ref(boot.images.directoryName);
+  /*
+   * The absolute path of the open directory and the remembered list beside it.
+   * Nothing is re-scanned on launch: an entry only re-opens when it is picked,
+   * through openImageDirectoryAt.
+   */
+  const imageDirectoryPath = ref(boot.images.directoryPath);
+  const imageRecentPaths = ref([...(boot.images.recentPaths ?? [])]);
   const imageGroups = ref([]);
   const imageFiles = ref([]);
   const selectedImageGroup = ref(boot.images.selectedGroup);
@@ -83,6 +91,49 @@ export function createImageSession({
     setImageStatus(
       `${normalized.length} image${normalized.length === 1 ? '' : 's'} found.`,
     );
+  }
+
+  /* --- remembered paths ------------------------------------------------------ */
+
+  /*
+   * Moves a directory to the front of the remembered list, dropping any earlier
+   * entry for it and keeping the list at MAX_RECENT_PATHS. A path that arrives
+   * empty (the browser directory input has no absolute path) is ignored, so the
+   * history only holds directories a later scan can re-open.
+   */
+  function rememberImagePath(path) {
+    const remembered = String(path ?? '').trim();
+    if (!remembered) return;
+    imageRecentPaths.value = [
+      remembered,
+      ...imageRecentPaths.value.filter((entry) => entry !== remembered),
+    ].slice(0, MAX_RECENT_PATHS);
+  }
+
+  /* Drops one remembered directory, used when the host can no longer scan it. */
+  function forgetImagePath(path) {
+    const target = String(path ?? '').trim();
+    if (!target) return;
+    imageRecentPaths.value = imageRecentPaths.value.filter(
+      (entry) => entry !== target,
+    );
+  }
+
+  /*
+   * Applies one host answer that is already a directory payload and remembers the
+   * path it names. Shared by the chooser and the path binding so both remember
+   * an entry identically.
+   */
+  function openImageDirectoryResult(result) {
+    const images = Array.isArray(result.images) ? result.images : [];
+    rememberImagePath(result.path);
+    imageDirectoryPath.value = String(result.path || '');
+    setImageCollection(images, result.name || 'Selected directory');
+    if (images.length === 0)
+      setImageStatus(
+        'No supported images were found within the directory limits.',
+        true,
+      );
   }
 
   /* --- lightbox controls ---------------------------------------------------- */
@@ -173,14 +224,42 @@ export function createImageSession({
     });
     try {
       if (outcome.status !== 'done') return;
-      const result = outcome.result;
-      const images = Array.isArray(result.images) ? result.images : [];
-      setImageCollection(images, result.name || 'Selected directory');
-      if (images.length === 0)
-        setImageStatus(
-          'No supported images were found within the directory limits.',
-          true,
-        );
+      openImageDirectoryResult(outcome.result);
+    } finally {
+      imageLoading.value = false;
+    }
+  }
+
+  /*
+   * Re-scans a remembered directory without showing the chooser. A directory
+   * that has been moved or deleted is dropped from the list, so the history
+   * heals itself instead of accumulating entries that cannot be opened.
+   */
+  async function openImageDirectoryAt(path) {
+    const target = String(path ?? '').trim();
+    if (!target) return;
+    const openAt = native('openImageDirectoryAt');
+    if (!openAt) {
+      setImageStatus(
+        'Opening a remembered directory is available in the desktop app.',
+      );
+      return;
+    }
+    imageLoading.value = true;
+    const outcome = await withFileTransfer(() => call(() => openAt(target)), {
+      report: setImageStatus,
+      messages: {
+        pending: `Reading ${target}…`,
+        error: 'Could not open the remembered directory.',
+      },
+    });
+    try {
+      if (outcome.status === 'canceled') return;
+      if (outcome.status !== 'done') {
+        forgetImagePath(target);
+        return;
+      }
+      openImageDirectoryResult(outcome.result);
     } finally {
       imageLoading.value = false;
     }
@@ -193,8 +272,8 @@ export function createImageSession({
       const count = `${imageFiles.value.length} image${imageFiles.value.length === 1 ? '' : 's'}`;
       return `${imageDirectoryName.value || 'Folder'} · ${count}`;
     }
-    if (imageDirectoryName.value) {
-      return `${imageDirectoryName.value} · re-select to reload`;
+    if (imageRecentPaths.value.length > 0) {
+      return `${imageRecentPaths.value.length} remembered director${imageRecentPaths.value.length === 1 ? 'y' : 'ies'}`;
     }
     return 'Browse images grouped by folder';
   });
@@ -202,6 +281,8 @@ export function createImageSession({
   return {
     imageDirectoryInput,
     imageDirectoryName,
+    imageDirectoryPath,
+    imageRecentPaths,
     imageGroups,
     imageFiles,
     selectedImageGroup,
@@ -215,12 +296,15 @@ export function createImageSession({
     imagesBadge,
     setImageStatus,
     setImageCollection,
+    rememberImagePath,
+    forgetImagePath,
     openLightbox,
     changeLightbox,
     closeLightbox,
     handleLightboxKeydown,
     loadBrowserImageDirectory,
     openImageDirectory,
+    openImageDirectoryAt,
   };
 }
 
@@ -233,6 +317,8 @@ const session = createImageSession();
 
 export const imageDirectoryInput = session.imageDirectoryInput;
 export const imageDirectoryName = session.imageDirectoryName;
+export const imageDirectoryPath = session.imageDirectoryPath;
+export const imageRecentPaths = session.imageRecentPaths;
 export const imageGroups = session.imageGroups;
 export const imageFiles = session.imageFiles;
 export const selectedImageGroup = session.selectedImageGroup;
@@ -246,9 +332,12 @@ export const activeLightboxImage = session.activeLightboxImage;
 export const imagesBadge = session.imagesBadge;
 export const setImageStatus = session.setImageStatus;
 export const setImageCollection = session.setImageCollection;
+export const rememberImagePath = session.rememberImagePath;
+export const forgetImagePath = session.forgetImagePath;
 export const openLightbox = session.openLightbox;
 export const changeLightbox = session.changeLightbox;
 export const closeLightbox = session.closeLightbox;
 export const handleLightboxKeydown = session.handleLightboxKeydown;
 export const loadBrowserImageDirectory = session.loadBrowserImageDirectory;
 export const openImageDirectory = session.openImageDirectory;
+export const openImageDirectoryAt = session.openImageDirectoryAt;

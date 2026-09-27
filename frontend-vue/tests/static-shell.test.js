@@ -86,6 +86,7 @@ test('Vue app uses reactive view state and native Vue event bindings', () => {
     'v-show="view === \'pdf\'"',
     'v-show="view === \'images\'"',
     'v-show="view === \'toc\'"',
+    'v-show="view === \'map\'"',
     "'pdf-active': view === 'pdf'",
     "'image-active': view === 'images'",
     'pdf-content',
@@ -95,6 +96,7 @@ test('Vue app uses reactive view state and native Vue event bindings', () => {
     "emit('select', 'pdf')",
     "emit('select', 'images')",
     "emit('select', 'toc')",
+    "emit('select', 'map')",
     '@select="selectView"',
   ]) {
     assert.match(component, new RegExp(escapePattern(text)));
@@ -234,15 +236,43 @@ test('Menu cards and tools show live cross-tool state', () => {
     'attachImageToToc',
     'openLinkedPdfPage',
     'openLinkedImages',
+    'openLinkedLocation',
+    'attachLocationToToc',
+    'id="map-link-target"',
+    'id="map-attach-location"',
+    'id="choose-workspace-directory"',
+    'id="combine-outline-pdf"',
+    'id="preview-outline-pdf"',
+    'id="outline-pdf-status"',
+    'combineOutlinePdf',
+    'previewOutlinePdf',
+    'renderOutlinePdf(exportTocJson()',
+    'id="open-linked-location"',
     'id="open-linked-pdf"',
-    'id="resume-pdf"',
+    'class="recent-paths"',
+    'v-for="path in pdfRecentPaths"',
+    '@click="openPdfAt(path)"',
+    'class="recent-paths-title"',
+    'v-for="path in imageRecentPaths"',
+    '@click="openImageDirectoryAt(path)"',
+  ]) {
+    assert.match(component, new RegExp(escapePattern(text)));
+  }
+});
+
+test('neither viewer restores a document on its own', () => {
+  for (const text of [
     'resumePdfSession',
     'Could not re-open ',
     'automatically. Use Browse files to pick it again.',
     'pdfPageNumber.value = savedPage',
+    'select the folder again to reload',
   ]) {
-    assert.match(component, new RegExp(escapePattern(text)));
+    assert.ok(!component.includes(text), `viewer still restores via: ${text}`);
   }
+  /* The path bindings are what replaced the restore, so they must be wired. */
+  assert.ok(component.includes('openPdfAt'));
+  assert.ok(component.includes('openImageDirectoryAt'));
 });
 
 test('Text editor is a plain writing surface bound to the outline', () => {
@@ -305,6 +335,7 @@ test('WebView template renders before Vue starts', () => {
   assert.match(template, /data-app="pdf"/);
   assert.match(template, /data-app="images"/);
   assert.match(template, /data-app="toc"/);
+  assert.match(template, /data-app="map"/);
   assert.match(template, /Image Viewer/);
   assert.match(template, /TOC Manager/);
   assert.match(template, /Native Workspace/);
@@ -339,7 +370,7 @@ test('Long state text never escapes its menu, toolbar, or sidebar', () => {
     /\.image-group-button small\s*\{[^}]*flex-shrink:\s*0/,
     /\.toc-item\s*\{[^}]*overflow-wrap:\s*anywhere/,
     /#cursor-position\s*\{[^}]*flex-shrink:\s*0/,
-    /\.pdf-resume\s*\{[^}]*overflow-wrap:\s*anywhere/,
+    /\.recent-path\s*\{[^}]*overflow-wrap:\s*anywhere/,
   ]) {
     assert.match(styles, pattern);
   }
@@ -465,7 +496,6 @@ test('Leaving the editor syncs the draft and the outline can force a save', () =
   for (const text of [
     'onViewLeaveEditor(() => syncTocDraft());',
     'configureTocOutline({ persistNow: () => persistWorkspace() });',
-    'onViewEnterPdf(() => {',
     'scheduleWorkspaceSave',
     'hydrateNativeWorkspace();',
   ]) {

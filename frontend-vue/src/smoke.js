@@ -23,7 +23,7 @@ export function smokeMayPersist(scope = globalThis) {
 
 /*
  * Elements the real UI must have rendered before any check is worth running.
- * They are structural, never state-dependent: the four tool panes use v-show,
+ * They are structural, never state-dependent: the five tool panes use v-show,
  * and the editor gate (.toc-pick) is what a fresh boot always shows.
  */
 const REQUIRED_ANCHORS = [
@@ -35,7 +35,11 @@ const REQUIRED_ANCHORS = [
   '.editor-app',
   '.pdf-app',
   '.image-app',
+  '.map-app',
 ];
+
+/* One card per tool on the launcher, so the count and the pane count agree. */
+const EXPECTED_MENU_CARDS = 5;
 
 /* Values exercising a normal summarize call: count 4, sum 10, mean 2.5. */
 const REPRESENTATIVE_VALUES = [1, 2, 3, 4];
@@ -60,13 +64,17 @@ export function checkDom(doc) {
   if (missing.length > 0) {
     return check('dom-anchors', false, `missing ${missing.join(' ')}`);
   }
-  if (cards !== 4) {
-    return check('dom-anchors', false, `expected 4 menu cards, found ${cards}`);
+  if (cards !== EXPECTED_MENU_CARDS) {
+    return check(
+      'dom-anchors',
+      false,
+      `expected ${EXPECTED_MENU_CARDS} menu cards, found ${cards}`,
+    );
   }
   return check(
     'dom-anchors',
     true,
-    `${REQUIRED_ANCHORS.length} anchors, 4 menu cards`,
+    `${REQUIRED_ANCHORS.length} anchors, ${EXPECTED_MENU_CARDS} menu cards`,
   );
 }
 

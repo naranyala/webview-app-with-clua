@@ -29,9 +29,10 @@ const SMOKE_ANCHORS = [
   '.editor-app',
   '.pdf-app',
   '.image-app',
+  '.map-app',
 ];
 
-function fakeDocument({ missing = [], cards = 4 } = {}) {
+function fakeDocument({ missing = [], cards = 5 } = {}) {
   const present = new Set(SMOKE_ANCHORS);
   for (const selector of missing) present.delete(selector);
   return {
@@ -104,7 +105,7 @@ describe('DOM check', () => {
     assert.deepEqual(checkDom(fakeDocument()), {
       name: 'dom-anchors',
       ok: true,
-      detail: '8 anchors, 4 menu cards',
+      detail: '9 anchors, 5 menu cards',
     });
   });
 
@@ -113,7 +114,7 @@ describe('DOM check', () => {
       checkDom(fakeDocument({ missing: ['.editor-app'] })).ok,
       false,
     );
-    assert.equal(checkDom(fakeDocument({ cards: 3 })).ok, false);
+    assert.equal(checkDom(fakeDocument({ cards: 4 })).ok, false);
   });
 
   test('no document at all fails instead of throwing', () => {

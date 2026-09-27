@@ -58,14 +58,19 @@ export function createWorkspacePersistence({
       editor: { content: sessions.editorContent.value },
       pdf: {
         name: sessions.pdfName.value,
+        path: sessions.pdfPath.value,
+        recentPaths: sessions.pdfRecentPaths.value,
         size: sessions.pdfSessionSize.value,
         url: sessions.pdfSourceUrl.value,
         documentId: sessions.pdfDocumentId.value,
         page: sessions.pdfPageNumber.value,
         zoom: sessions.pdfZoom.value,
+        workspaceDirectory: sessions.workspaceDirectory?.value ?? '',
       },
       images: {
         directoryName: sessions.imageDirectoryName.value,
+        directoryPath: sessions.imageDirectoryPath.value,
+        recentPaths: sessions.imageRecentPaths.value,
         selectedGroup: sessions.selectedImageGroup.value,
       },
     };
@@ -74,6 +79,9 @@ export function createWorkspacePersistence({
   /*
    * Restores a snapshot into the session modules. Returns false when the
    * snapshot is missing, so hydration can keep the boot state.
+   *
+   * Only the remembered paths come back: a document or directory is re-opened
+   * by picking its path, never as a side effect of loading the workspace.
    */
   function apply(incoming) {
     if (!incoming) return false;
@@ -88,12 +96,19 @@ export function createWorkspacePersistence({
     sessions.linkTargetId.value = activeId || incoming.tocItems[0]?.id || null;
     sessions.editorContent.value = incoming.editor.content;
     sessions.pdfName.value = incoming.pdf.name || 'No document selected';
+    sessions.pdfPath.value = incoming.pdf.path || '';
+    sessions.pdfRecentPaths.value = [...(incoming.pdf.recentPaths ?? [])];
     sessions.pdfSessionSize.value = incoming.pdf.size;
     sessions.pdfSourceUrl.value = incoming.pdf.url;
     sessions.pdfDocumentId.value = incoming.pdf.documentId;
     sessions.pdfPageNumber.value = incoming.pdf.page;
     sessions.pdfZoom.value = incoming.pdf.zoom;
+    if (sessions.workspaceDirectory) {
+      sessions.workspaceDirectory.value = incoming.pdf.workspaceDirectory || '';
+    }
     sessions.imageDirectoryName.value = incoming.images.directoryName;
+    sessions.imageDirectoryPath.value = incoming.images.directoryPath || '';
+    sessions.imageRecentPaths.value = [...(incoming.images.recentPaths ?? [])];
     sessions.selectedImageGroup.value = incoming.images.selectedGroup;
     return true;
   }

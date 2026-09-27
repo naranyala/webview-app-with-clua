@@ -10,7 +10,6 @@ import {
 
 import {
   hasUserInteracted,
-  onViewEnterPdf,
   onViewLeaveEditor,
   selectView,
   view,
@@ -28,6 +27,7 @@ import {
   editorWordCount,
   updateCursor,
 } from './editor-session.js';
+import { suggestFileName } from './file-io.js';
 import {
   activeLightboxImage,
   changeLightbox,
@@ -35,20 +35,59 @@ import {
   handleLightboxKeydown,
   imageDirectoryInput,
   imageDirectoryName,
+  imageDirectoryPath,
   imageFiles,
   imageGroups,
   imageLoading,
+  imageRecentPaths,
   imageStatus,
   imageStatusError,
   imagesBadge,
   lightboxIndex,
   loadBrowserImageDirectory,
   openImageDirectory,
+  openImageDirectoryAt,
   openLightbox,
   selectedImageGroup,
   setImageStatus,
   visibleImages,
 } from './image-session.js';
+import {
+  disposeMapExplorer,
+  formatCoordinates,
+  handleMapPointerCancel,
+  handleMapPointerDown,
+  handleMapPointerMove,
+  handleMapPointerUp,
+  handleMapWheel,
+  handleWindowResize,
+  mapBadge,
+  mapElement,
+  mapPin,
+  mapPinOffset,
+  mapStatus,
+  mapStatusError,
+  mapTiles,
+  mapZoom,
+  measureMap,
+  setMapStatus,
+  showMapLocation,
+  startMapObserver,
+  tileSource,
+  zoomIn,
+  zoomOut,
+} from './map-explorer.js';
+import {
+  chooseWorkspaceDirectory,
+  lastOutlinePdf,
+  outlinePdfBusy,
+  outlinePdfStatus,
+  outlinePdfStatusError,
+  outlinePdfSummary,
+  renderOutlinePdf,
+  setOutlinePdfStatus,
+  workspaceDirectory,
+} from './outline-pdf.js';
 import {
   activePage,
   changePdfPage,
@@ -57,6 +96,7 @@ import {
   handlePdfScroll,
   navigateToPage,
   openPdf,
+  openPdfAt,
   pdfBadge,
   pdfContentElement,
   pdfDocument,
@@ -66,6 +106,8 @@ import {
   pdfName,
   pdfPageCount,
   pdfPageNumber,
+  pdfPath,
+  pdfRecentPaths,
   pdfRenderError,
   pdfSessionSize,
   pdfSourceUrl,
@@ -73,7 +115,6 @@ import {
   pdfStatusError,
   pdfZoom,
   renderAllPdfPages,
-  resumePdfSession,
   scrollToPdfPage,
   setPdfPageCanvas,
   setPdfStatus,
@@ -89,12 +130,14 @@ import {
   activeTocItem,
   addTocItem,
   attachImageToToc,
+  attachLocationToToc,
   attachPdfPageToToc,
   cancelTocEdit,
   configureTocOutline,
   editingTocId,
   editorImportInput,
   exportActiveDraftToFile,
+  exportTocJson,
   exportTocToFile,
   filteredTocItems,
   handleEditorImportFile,
@@ -108,6 +151,7 @@ import {
   moveTocItem,
   nextTocItem,
   openLinkedImages,
+  openLinkedLocation,
   openLinkedPdfPage,
   previousTocItem,
   removeTocItem,
@@ -165,6 +209,15 @@ const outlineBadge = computed(() => {
   return `${total} item${total === 1 ? '' : 's'} declared · ${written} written`;
 });
 
+/*
+ * A name for the combined file. The first declared section is the most useful
+ * default; the workspace folder is not part of it, because the host already
+ * knows where it writes.
+ */
+const combinedDocumentTitle = computed(
+  () => tocItems.value[0]?.title || 'Outline',
+);
+
 const editorBadge = computed(() => {
   if (activeTocItem.value) {
     return `Writing “${activeTocItem.value.title}” · ${editorWordCount.value} words`;
@@ -208,11 +261,12 @@ function goDeclareSection() {
   nextTick(() => document.getElementById('toc-title-input')?.focus());
 }
 
-/* Leaving the editor flushes the draft; entering the PDF resumes its session. */
+/*
+ * Leaving the editor flushes the draft. Nothing is restored when the reader is
+ * entered: a document only re-opens when its path is picked from the history
+ * list, so the pane comes back exactly as it was left.
+ */
 onViewLeaveEditor(() => syncTocDraft());
-onViewEnterPdf(() => {
-  if (!pdfDocument.value && pdfSourceUrl.value) resumePdfSession();
-});
 
 /* --- workspace persistence ------------------------------------------------ */
 
@@ -231,12 +285,16 @@ const persistence = createWorkspacePersistence({
     linkTargetId,
     editorContent,
     pdfName,
+    pdfPath,
+    pdfRecentPaths,
     pdfSessionSize,
     pdfSourceUrl,
     pdfDocumentId,
     pdfPageNumber,
     pdfZoom,
     imageDirectoryName,
+    imageDirectoryPath,
+    imageRecentPaths,
     selectedImageGroup,
   },
   store: {
@@ -278,12 +336,16 @@ watch(
     tocItems,
     activeTocId,
     pdfName,
+    pdfPath,
+    pdfRecentPaths,
     pdfSessionSize,
     pdfSourceUrl,
     pdfDocumentId,
     pdfPageNumber,
     pdfZoom,
     imageDirectoryName,
+    imageDirectoryPath,
+    imageRecentPaths,
     selectedImageGroup,
   ],
   scheduleWorkspaceSave,
@@ -329,29 +391,97 @@ function handleVisibilityChange() {
 onMounted(async () => {
   await hydrateNativeWorkspace();
 
-  if (view.value === 'pdf' && pdfSourceUrl.value) resumePdfSession();
-  if (
-    view.value === 'images' &&
-    imageDirectoryName.value &&
-    imageFiles.value.length === 0
-  ) {
+  /*
+   * The workspace may have restored the last view, and neither viewer restores
+   * content: they open empty, with the remembered paths waiting to be picked.
+   */
+  if (view.value === 'images' && imageFiles.value.length === 0) {
     setImageStatus(
-      `${imageDirectoryName.value}: select the folder again to reload its images.`,
+      imageRecentPaths.value.length > 0
+        ? 'Pick a remembered directory above to load its images.'
+        : 'Choose a parent directory to find images.',
     );
+  }
+  if (
+    view.value === 'pdf' &&
+    !pdfDocument.value &&
+    pdfRecentPaths.value.length === 0
+  ) {
+    setPdfStatus('Choose a PDF from your system to begin reading.');
   }
   if (view.value === 'editor') {
     nextTick(() => editorInput.value?.focus());
   }
+  /* The boot workspace can restore 'map' directly, so measure on first paint. */
+  if (view.value === 'map') startMapObserverAfterPaint();
 });
+
+/*
+ * The map pane is hidden with v-show, so it has no measurable size until the
+ * view first becomes visible - and with no size there are no tiles to place.
+ * Measuring on entry is what makes the canvas fill in, and the observer started
+ * here keeps it correct across later resizes.
+ */
+function startMapObserverAfterPaint() {
+  nextTick(() => {
+    startMapObserver();
+    measureMap();
+  });
+}
+
+watch(view, (current, previous) => {
+  if (current !== 'map' || previous === 'map') return;
+  startMapObserverAfterPaint();
+});
+
+/*
+ * The outline combined into one PDF. The host owns the workspace folder, so
+ * this only supplies the document and the suggested name; the name is sanitized
+ * again on the host side before anything is written.
+ *
+ * exportTocJson() is reused as the payload: it is already the versioned envelope
+ * with every item's title, level, and content, which is exactly what the
+ * renderer reads. Reusing it means an export and a combined PDF can never
+ * disagree about what the outline contains.
+ */
+async function combineOutlinePdf() {
+  if (tocItems.value.length === 0) {
+    setOutlinePdfStatus('Declare at least one section before combining.', true);
+    return;
+  }
+  const suggested = suggestFileName(
+    combinedDocumentTitle.value,
+    'pdf',
+    'outline',
+  );
+  const written = await renderOutlinePdf(exportTocJson(), suggested);
+  if (!written) return;
+  markUserInteracted();
+  scheduleWorkspaceSave();
+}
+
+/* The preview is the existing reader, opened by the path the host reported. */
+async function previewOutlinePdf() {
+  const path = lastOutlinePdf.value?.path;
+  if (!path) {
+    setOutlinePdfStatus('There is no combined PDF to preview yet.', true);
+    return;
+  }
+  selectView('pdf');
+  await openPdfAt(path);
+}
 
 window.addEventListener('pagehide', flushWorkspace);
 window.addEventListener('beforeunload', flushWorkspace);
 document.addEventListener('visibilitychange', handleVisibilityChange);
+window.addEventListener('resize', handleWindowResize);
 
 onBeforeUnmount(() => {
   window.removeEventListener('pagehide', flushWorkspace);
   window.removeEventListener('beforeunload', flushWorkspace);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('resize', handleWindowResize);
+  disposeMapExplorer();
   flushWorkspace();
   disposePdfSession();
 });
@@ -400,6 +530,7 @@ onBeforeUnmount(() => {
         :pdf-badge="pdfBadge"
         :images-badge="imagesBadge"
         :outline-badge="outlineBadge"
+        :map-badge="mapBadge"
         @select="selectView"
       />
     </div>
@@ -419,10 +550,36 @@ onBeforeUnmount(() => {
           />
           <button class="toolbar-button subtle" id="toc-import-json" type="button" @click="importTocFromFile">Import…</button>
           <button class="toolbar-button subtle" id="toc-export-json" type="button" :disabled="tocItems.length === 0" @click="exportTocToFile">Export…</button>
+          <button class="toolbar-button subtle" id="choose-workspace-directory" type="button" :disabled="outlinePdfBusy" @click="chooseWorkspaceDirectory">Workspace folder…</button>
+          <button class="toolbar-button primary" id="combine-outline-pdf" type="button" :disabled="tocItems.length === 0 || outlinePdfBusy" @click="combineOutlinePdf">Combine to PDF</button>
           <button v-if="lastRemoved" class="toolbar-button subtle toc-undo" id="toc-undo-remove" type="button" @click="undoTocRemoval">Undo remove</button>
           <button class="toolbar-button subtle" id="resume-writing" type="button" :disabled="!activeTocId" @click="selectView('editor')">Resume writing</button>
         </div>
       </header>
+
+      <!--
+        The combined PDF is a plain file in the one workspace folder, so this bar
+        only reports where it went and offers the preview. The preview is the
+        existing reader, opened by path - nothing is held in memory.
+      -->
+      <div v-if="workspaceDirectory || lastOutlinePdf" class="outline-pdf-bar">
+        <span class="outline-pdf-label" :title="workspaceDirectory">
+          {{ workspaceDirectory || 'No workspace folder chosen' }}
+        </span>
+        <StatusLine
+          id="outline-pdf-status"
+          class="outline-pdf-status"
+          :message="outlinePdfStatus"
+          :error="outlinePdfStatusError"
+        />
+        <button
+          v-if="lastOutlinePdf"
+          class="toolbar-button subtle"
+          id="preview-outline-pdf"
+          type="button"
+          @click="previewOutlinePdf"
+        >Preview {{ outlinePdfSummary }}</button>
+      </div>
 
       <input
         id="toc-import-input"
@@ -504,6 +661,13 @@ onBeforeUnmount(() => {
                   <button v-if="item.links.pdfPage" class="toc-outline-link" type="button" :title="`Open ${item.links.pdfName || 'the PDF'} at page ${item.links.pdfPage}`" @click="openLinkedPdfPage(item)">p.{{ item.links.pdfPage }}</button>
                   <button v-if="item.links.images.length" class="toc-outline-link" type="button" :title="`${item.links.images.length} attached image(s)`" @click="openLinkedImages(item)">IMG {{ item.links.images.length }}</button>
                   <button
+                    v-if="item.links.location"
+                    class="toc-outline-link map-outline-link"
+                    type="button"
+                    :title="`Show ${item.links.location.label || 'the saved place'} at ${formatCoordinates(item.links.location)}`"
+                    @click="openLinkedLocation(item)"
+                  >LOC</button>
+                  <button
                     class="toc-outline-move"
                     type="button"
                     :disabled="Boolean(tocFilterQuery.trim()) || index === 0"
@@ -549,6 +713,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="top-actions">
           <button v-if="activeTocItem?.links?.pdfPage" class="toolbar-button subtle" id="open-linked-pdf" type="button" @click="openLinkedPdfPage(activeTocItem)">PDF p.{{ activeTocItem.links.pdfPage }}</button>
+          <button v-if="activeTocItem?.links?.location" class="toolbar-button subtle" id="open-linked-location" type="button" @click="openLinkedLocation(activeTocItem)">Location</button>
           <button v-if="activeTocItem" class="toolbar-button subtle" id="previous-outline-item" type="button" :disabled="!previousTocItem" @click="previousTocItem && selectTocItem(previousTocItem)">‹ Prev</button>
           <button v-if="activeTocItem" class="toolbar-button subtle" id="next-outline-item" type="button" :disabled="!nextTocItem" @click="nextTocItem && selectTocItem(nextTocItem)">Next ›</button>
           <button v-if="activeTocItem" class="toolbar-button subtle" id="editor-import-file" type="button" @click="importActiveDraftFromFile">Import…</button>
@@ -665,9 +830,22 @@ onBeforeUnmount(() => {
         />
         <div v-if="!imageFiles.length" class="image-empty">
           <span class="image-large-icon" aria-hidden="true">IMG</span>
-          <h2>Browse a folder of images</h2>
-          <p>Select a parent directory. Inner folders become categories in the sidebar.</p>
-          <button class="toolbar-button primary" id="browse-image-directory" type="button" @click="openImageDirectory">Choose directory</button>
+          <h2>Open a folder of images</h2>
+          <p>Pick a remembered directory below, or choose a parent one. Inner folders become categories in the sidebar.</p>
+          <button class="toolbar-button primary" id="browse-image-directory" type="button" :disabled="imageLoading" @click="openImageDirectory">Choose directory</button>
+          <!--
+            The remembered list replaces the old "select the folder again to
+            reload" flow: a stored directory is only scanned when its path is
+            chosen here, so no launch walks the filesystem on its own.
+          -->
+          <div v-if="imageRecentPaths.length" class="recent-paths" aria-label="Remembered directories">
+            <span class="recent-paths-title">REMEMBERED</span>
+            <ul class="recent-paths-list">
+              <li v-for="path in imageRecentPaths" :key="path">
+                <button class="recent-path" type="button" :disabled="imageLoading" :title="path" @click="openImageDirectoryAt(path)">{{ path }}</button>
+              </li>
+            </ul>
+          </div>
         </div>
         <div v-else class="image-grid" aria-label="Image thumbnails">
           <button v-for="image in visibleImages" :key="image.relativePath" class="image-thumbnail" type="button" @click="openLightbox(image)">
@@ -745,11 +923,22 @@ onBeforeUnmount(() => {
         <input id="pdf-file-input" ref="pdfFileInput" class="sr-only" type="file" accept="application/pdf,.pdf" @change="handlePdfFile" />
         <div v-show="!pdfDocument" class="pdf-empty" id="pdf-empty">
           <span class="pdf-large-icon" aria-hidden="true">PDF</span>
-          <h2>Read a local PDF</h2>
-          <p>Use the system file picker to securely open a document from this computer.</p>
-          <p v-if="pdfName !== 'No document selected'" class="pdf-resume">Last session: {{ pdfName }} · page {{ pdfPageNumber }} · {{ Math.round(pdfZoom * 100) }}%</p>
-          <button v-if="pdfName !== 'No document selected'" class="toolbar-button subtle" id="resume-pdf" type="button" @click="pdfSourceUrl ? resumePdfSession() : openPdf()">Resume session</button>
+          <h2>Open a PDF</h2>
+          <p>Pick a remembered document below, or browse this computer for a new one.</p>
           <button class="toolbar-button primary" id="browse-pdf" type="button" @click="openPdf">Browse files</button>
+          <!--
+            The remembered list replaces the old auto-restore: a stored document
+            is only re-opened when its path is chosen here, so nothing is read
+            from disk behind the user's back.
+          -->
+          <div v-if="pdfRecentPaths.length" class="recent-paths" aria-label="Remembered documents">
+            <span class="recent-paths-title">REMEMBERED</span>
+            <ul class="recent-paths-list">
+              <li v-for="path in pdfRecentPaths" :key="path">
+                <button class="recent-path" type="button" :disabled="pdfLoading" :title="path" @click="openPdfAt(path)">{{ path }}</button>
+              </li>
+            </ul>
+          </div>
         </div>
         <div v-show="pdfDocument" class="pdf-rendered" aria-label="Selected PDF document">
           <div class="pdf-page-controls">
@@ -768,6 +957,74 @@ onBeforeUnmount(() => {
               <canvas :ref="(element) => setPdfPageCanvas(element, pageNumber)" class="pdf-canvas" :aria-label="`Rendered PDF page ${pageNumber}`"></canvas>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section v-show="view === 'map'" class="map-app" data-view="map" aria-label="OpenStreetMap explorer">
+      <header class="map-toolbar">
+        <div>
+          <span class="map-eyebrow">MAP EXPLORER</span>
+          <strong id="map-center-label">{{ mapPin ? formatCoordinates(mapPin) : 'No pin' }}</strong>
+        </div>
+        <div class="map-actions">
+          <StatusLine
+            id="map-status"
+            class="map-status"
+            :message="mapStatus"
+            :error="mapStatusError"
+          />
+          <button class="toolbar-button subtle" id="map-zoom-out" type="button" aria-label="Zoom out" @click="zoomOut">−</button>
+          <span class="map-coords">z{{ mapZoom }}</span>
+          <button class="toolbar-button subtle" id="map-zoom-in" type="button" aria-label="Zoom in" @click="zoomIn">+</button>
+          <label class="sr-only" for="map-link-target">Outline item</label>
+          <select id="map-link-target" v-model="linkTargetId">
+            <option :value="null" disabled>Select outline item</option>
+            <option v-for="item in tocItems" :key="item.id" :value="item.id">{{ item.title }}</option>
+          </select>
+          <button class="toolbar-button primary" id="map-attach-location" type="button" :disabled="!linkTarget || !mapPin" @click="attachLocationToToc">Attach location</button>
+        </div>
+      </header>
+      <!--
+        role="application" with a tabindex: the map is a drag-and-wheel surface
+        with no focusable children, so without them it could only be driven with
+        a mouse. aria-live is off on the readout because it changes on every pan
+        and would flood a screen reader mid-drag.
+      -->
+      <div
+        id="map-canvas"
+        ref="mapElement"
+        class="map-canvas"
+        role="application"
+        aria-label="OpenStreetMap. Click to drop a pin, drag to pan, scroll to zoom."
+        tabindex="0"
+        @pointerdown="handleMapPointerDown"
+        @pointermove="handleMapPointerMove"
+        @pointerup="handleMapPointerUp"
+        @pointercancel="handleMapPointerCancel"
+        @wheel="handleMapWheel"
+      >
+        <img
+          v-for="tile in mapTiles"
+          :key="tile.key"
+          class="map-tile"
+          :src="tileSource(tile)"
+          :style="{ left: `${tile.left}px`, top: `${tile.top}px` }"
+          alt=""
+          aria-hidden="true"
+          draggable="false"
+        />
+        <span
+          v-if="mapPin && mapPinOffset"
+          class="map-pin"
+          :style="{ left: `${mapPinOffset.left}px`, top: `${mapPinOffset.top}px` }"
+        ></span>
+        <span class="map-attribution">
+          © <a href="https://www.openstreetmap.org/copyright" rel="noreferrer noopener" target="_blank">OpenStreetMap</a> contributors
+        </span>
+        <div v-if="!mapTiles.length" class="map-empty">
+          <h2>Map unavailable</h2>
+          <p>The tile area has not been measured yet. Tiles need a network connection.</p>
         </div>
       </div>
     </section>

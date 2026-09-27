@@ -152,14 +152,18 @@ describe('independent PDF sessions', () => {
 });
 
 describe('independent outlines with stub collaborators', () => {
-  /* Minimal stand-ins for the three sessions an outline binds to. */
+  /* Minimal stand-ins for the four sessions an outline binds to. */
   function collaborators() {
     const notice = [];
     const imageStatus = [];
+    const mapShown = [];
+    const mapStatus = [];
     const pdfStatus = [];
     return {
       notice,
       imageStatus,
+      mapShown,
+      mapStatus,
       pdfStatus,
       editor: {
         editorContent: { value: '' },
@@ -176,11 +180,12 @@ describe('independent outlines with stub collaborators', () => {
         pdfDocument: { value: null },
         pdfName: { value: '' },
         pdfPageNumber: { value: 1 },
+        pdfPath: { value: '' },
         pdfStatus: { value: '' },
         pdfStatusError: { value: false },
         setPdfStatus: (message) => pdfStatus.push(message),
         navigateToPage: () => {},
-        resumePdfSession: () => {},
+        openPdfAt: () => {},
         tocHeadings: { value: [] },
         setTocMessage: () => {},
       },
@@ -192,6 +197,14 @@ describe('independent outlines with stub collaborators', () => {
         setImageCollection: () => {},
         openLightbox: () => {},
         setImageStatus: (message) => imageStatus.push(message),
+      },
+      map: {
+        mapPin: { value: null },
+        showMapLocation: (value) => {
+          mapShown.push(value);
+          return true;
+        },
+        setMapStatus: (message) => mapStatus.push(message),
       },
       transfer: {
         read: async () => ({ canceled: true }),
@@ -211,6 +224,7 @@ describe('independent outlines with stub collaborators', () => {
       shell: deps.shell,
       pdf: deps.pdf,
       images: deps.images,
+      map: deps.map,
       transfer: deps.transfer,
     });
     return { outline, doc, deps };
@@ -272,6 +286,7 @@ describe('independent outlines with stub collaborators', () => {
       shell: deps.shell,
       pdf: deps.pdf,
       images: deps.images,
+      map: deps.map,
       transfer: deps.transfer,
       persist: () => false,
     });

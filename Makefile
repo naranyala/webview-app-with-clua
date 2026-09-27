@@ -13,6 +13,8 @@ LUA_LIBS := $(shell $(PKG_CONFIG) --libs $(LUA_PKG) 2>/dev/null || $(PKG_CONFIG)
 GTK_CFLAGS := $(shell $(PKG_CONFIG) --cflags gtk+-3.0 2>/dev/null)
 GLIB_CFLAGS := $(shell $(PKG_CONFIG) --cflags glib-2.0 2>/dev/null)
 GTK_LIBS := $(shell $(PKG_CONFIG) --libs gtk+-3.0 2>/dev/null)
+CAIRO_CFLAGS := $(shell $(PKG_CONFIG) --cflags cairo 2>/dev/null)
+CAIRO_LIBS := $(shell $(PKG_CONFIG) --libs cairo 2>/dev/null)
 GLIB_LIBS := $(shell $(PKG_CONFIG) --libs glib-2.0 2>/dev/null)
 
 CFLAGS ?= -O2 -g
@@ -41,13 +43,17 @@ $(TEST_MAKE): $(TEST_MANIFEST) tools/tests-manifest.awk Makefile
 include $(TEST_MAKE)
 
 .PHONY: all run test c-tests sanitized-test lua-test smoke-unit-test smoke-test
-.PHONY: desktop clean check-lua check-gtk check-pdftotext
+.PHONY: desktop clean check-lua check-gtk check-pdftotext check-cairo
 
 all: $(MODULE)
 
 check-lua:
 	@command -v "$(LUA)" >/dev/null 2>&1 || { echo "Lua executable '$(LUA)' not found. Set LUA=... ."; exit 1; }
 	@test -n "$(LUA_LIBS)" || { echo "Lua development files not found for pkg-config package '$(LUA_PKG)'. Install the Lua development package or set LUA_PKG=... ."; exit 1; }
+
+check-cairo:
+	@command -v $(PKG_CONFIG) >/dev/null 2>&1 || { echo "pkg-config not found."; exit 1; }
+	@$(PKG_CONFIG) --exists cairo || { echo "cairo not found by pkg-config. The combined-outline PDF renderer needs it."; exit 1; }
 
 check-gtk:
 	@test -n "$(GTK_LIBS)" || { echo "GTK 3 development files not found for pkg-config 'gtk+-3.0'. Install the GTK 3 development package."; exit 1; }

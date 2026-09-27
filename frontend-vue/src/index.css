@@ -460,7 +460,13 @@ button {
 
 .app-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 310px));
+  /*
+   * Five tools, five columns on a wide window. A fixed 4 left the fifth card
+   * orphaned on a row of its own, and auto-fit is deliberately not used: the
+   * breakpoints below already pick the column count, so one rule per width is
+   * easier to reason about than a fluid count.
+   */
+  grid-template-columns: repeat(5, minmax(0, 250px));
   justify-content: center;
   gap: 18px;
 }
@@ -1172,12 +1178,58 @@ body [hidden] {
   object-fit: contain;
   box-shadow: 0 16px 50px #000b;
 }
-.pdf-resume {
-  max-width: 100%;
+/* --- remembered paths: the PDF and image viewers' open-from-history list --- */
+/*
+ * Shared by both empty states, so "pick a path you used before" looks and reads
+ * the same in either viewer. Overflow-wrap: anywhere is load-bearing: these are
+ * absolute filesystem paths, which are long and have no spaces to break on.
+ */
+.recent-paths {
+  display: grid;
+  width: min(100%, 560px);
+  gap: 7px;
+  margin-top: 6px;
+  text-align: left;
+}
+.recent-paths-title {
+  color: #858c98;
+  font-size: 0.72rem;
+  letter-spacing: 0.09em;
+}
+.recent-paths-list {
+  display: grid;
+  max-height: 190px;
+  gap: 6px;
   margin: 0;
-  color: #aeb5c0;
-  font-size: 0.8rem;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.recent-path {
+  display: block;
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid #353a44;
+  border-radius: 7px;
+  background: #22262e;
+  color: #d6dae1;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
   overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.recent-path:hover:not(:disabled) {
+  border-color: #4a5162;
+  background: #262b34;
+}
+.recent-path:focus-visible {
+  outline: 2px solid #6f8cff;
+  outline-offset: 2px;
+}
+.recent-path:disabled {
+  color: #6b7280;
+  cursor: progress;
 }
 .lightbox-attach {
   display: flex;
@@ -1432,6 +1484,157 @@ body [hidden] {
 }
 /* --- Responsive layout: sidebar collapses, then the grid stacks --- */
 
+/* --- OpenStreetMap Explorer: a tiled canvas plus a toolbar --- */
+/*
+ * The map is a toolbar row over a tile canvas. The canvas is position:relative
+ * and clips its own overflow so tiles are positioned in page pixels relative to
+ * its top-left corner, which is exactly what visibleTiles() returns — the
+ * projection does the scrolling, not the DOM.
+ */
+.map-app {
+  display: grid;
+  height: calc(100vh - 72px);
+  min-height: 0;
+  grid-template-rows: 54px minmax(0, 1fr);
+  background: #1d1f25;
+}
+.map-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 18px;
+  border-bottom: 1px solid #2b2f37;
+  background: #22262e;
+}
+.map-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.map-canvas {
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  background: #262b33;
+  cursor: grab;
+  /* Stops the browser from panning the whole page on a touch drag. */
+  touch-action: none;
+  user-select: none;
+}
+.map-canvas:active {
+  cursor: grabbing;
+}
+.map-canvas:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: -2px;
+}
+.map-tile {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  pointer-events: none;
+}
+.map-pin {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: #d1483f;
+  box-shadow: 0 3px 10px #000a;
+  pointer-events: none;
+  transform: rotate(-45deg);
+}
+.map-readout {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.map-coords {
+  color: #aeb5c0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+/*
+ * The tile policy requires visible attribution. It stays legible over any tile
+ * rather than fading out, because a faded-out credit is not a credit.
+ */
+.map-attribution {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 2px 6px;
+  background: #17191ecc;
+  color: #c8ced8;
+  font-size: 0.66rem;
+}
+.map-empty {
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  height: 100%;
+  text-align: center;
+}
+.map-empty p {
+  max-width: 34ch;
+  margin: 0;
+  color: #858c98;
+  font-size: 0.86rem;
+}
+.map-icon {
+  background: linear-gradient(160deg, #4a7f4e, #2f5c39);
+}
+.map-outline-link {
+  border-color: #4c6b4f;
+  background: #23301f;
+  color: #b6dba8;
+}
+
+/* --- combined-outline PDF bar --------------------------------------------- */
+/*
+ * Sits under the TOC Manager toolbar and reports where the combined file went.
+ * The folder path is the long, unbounded part, so it takes the space and
+ * ellipsizes while the status and the preview button keep their size.
+ */
+.outline-pdf-bar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 20px;
+  border-bottom: 1px solid #2b2f37;
+  background: #1f232a;
+}
+.outline-pdf-label {
+  min-width: 0;
+  max-width: 46ch;
+  color: #aeb5c0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+.outline-pdf-status {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #858c98;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1400px) {
+  /* Five 250px cards plus gaps need ~1400px; below that, three per row. */
+  .app-grid {
+    grid-template-columns: repeat(3, minmax(0, 300px));
+  }
+}
 @media (max-width: 1100px) {
   .app-grid {
     grid-template-columns: repeat(2, minmax(0, 330px));

@@ -41,19 +41,35 @@ optional file filter and suggested name) and `dispatch_picker` performs the
 request bookkeeping for `openPdf`, `openImageDirectory`, and the text
 transfers alike. The PDF-specific validation lives in
 `src/pdf_session.c`: it verifies that the selection is a regular readable file with a
-`%PDF-` header, then returns the display filename, byte size, a `documentId`, an
-encoded `file://` URL, and a `dataUrl` for files up to 32 MiB. The data URL lets
-PDF.js render native selections from an embedded WebView without relying on
-WebKit's unavailable native PDF plugin. Larger files remain available through
-the encoded URL. The full local path remains native-only. Cancellation returns
+`%PDF-` header, then returns the display filename, the absolute `path`, byte
+size, a `documentId`, an encoded `file://` URL, and a `dataUrl` for files up to
+32 MiB. The data URL lets PDF.js render native selections from an embedded
+WebView without relying on WebKit's unavailable native PDF plugin. Larger files
+remain available through the encoded URL. Cancellation returns
 `{ "canceled": true }`; invalid files return a structured error.
 
-The frontend persists the returned `documentId` and encoded `file://` URL
-together with its own page and zoom position in the workspace store, so a
-restart can re-render the same document without another picker round trip. If
-the WebView refuses to fetch that URL, the reader falls back to an explicit
-re-open prompt; a native `restorePdf` command remains a conditional follow-up
-(see `TODOS.md`, TODO-032).
+### Re-opening a remembered document
+
+Because the answer carries `path`, the frontend keeps a list of the paths it has
+opened and can re-open one without a chooser through a second binding:
+
+```js
+const document = await window.openPdfAt('/absolute/path/to/doc.pdf');
+```
+
+`openPdfAt` takes the path as its only request argument. It is dispatched to the
+GTK main loop with `dispatch_picker_with_payload` (the same payload channel the
+text save binding uses), decoded with the shared `json_read_string_array` codec,
+and handed to the *same* `answer_pdf_document` routine the chooser uses, so both
+entry points reject identical files and return identical payloads. The path must
+be absolute: a relative path would resolve against the host's working directory,
+which is never what the webview meant. A missing or malformed request, or a
+non-absolute path, returns `INVALID_PATH`; an unreadable or non-PDF file returns
+the same `INVALID_PDF` error the chooser produces.
+
+There is no auto-restore. `resumePdfSession` was removed: the reader no longer
+re-opens a stored document as a side effect of loading the workspace, and the
+path list is the only way back to a previous document.
 
 ## Image directory picker
 
@@ -65,9 +81,65 @@ const folder = await window.openImageDirectory();
 
 It opens the same chooser in `PICKER_SELECT_FOLDER` mode, scans the folder for
 images within the size and count limits, and answers
-`{ "images": [...], "name": "...", "limited": false }` with base64 data URLs,
-or `{ "canceled": true }`. Outside the desktop host the frontend uses its own
-`input[webkitdirectory]` fallback instead.
+`{ "images": [...], "name": "...", "path": "...", "limited": false }` with
+base64 data URLs, or `{ "canceled": true }`. Outside the desktop host the
+frontend uses its own `input[webkitdirectory]` fallback instead.
+
+### Re-opening a remembered directory
+
+`openImageDirectoryAt(path)` is the chooser-free counterpart, with the same
+payload decoding, absolute-path requirement, and shared
+`answer_image_directory` implementation:
+
+```js
+const folder = await window.openImageDirectoryAt('/absolute/path/to/photos');
+```
+
+Like the PDF binding, it re-scans a stored directory only when the user picks it.
+
+## Combined outline PDF
+
+The TOC Manager can render the whole outline into one PDF inside a single
+workspace directory. Two bindings in `src/outline_pdf.c` do it.
+
+```js
+const folder = await window.chooseOutlineDirectory();
+const written = await window.renderOutlinePdf('report', outlineJson);
+// -> { path, name, pages, bytes }
+```
+
+`chooseOutlineDirectory` opens the folder chooser and records the answer on
+`app_context.outline_dir`. `renderOutlinePdf` takes `["suggestedName",
+"outlineJson"]` and will only write inside that recorded directory, so the
+webview cannot name a path to write into on its own. The name is reduced to a
+basename with `..`, separators, control characters, and the characters Windows
+rejects all removed, so it cannot escape the directory; it is bounded to 120
+characters and always ends in `.pdf`.
+
+The renderer is cairo's PDF surface. Cairo is already a transitive `gtk+-3.0`
+dependency, so no new library is introduced, and the output is an ordinary PDF
+that the existing reader opens as the preview. Pages are A4 (595.28 x 841.89
+points); each item's title is a heading sized by its level and indented by it,
+and its content is word-wrapped to the measure. A heading is never left alone at
+the foot of a page.
+
+**This needed a JSON reader.** The host previously only understood the
+`["a","b"]` argument array that `json_read_string_array` decodes, which cannot
+walk a document. `json_io.c` grew a general value parser
+(`json_parse`, `json_object_get`, `json_at`, and friends) so the codec stays the
+one place that decides what valid JSON is. It is recursive, so it is bounded by
+`JSON_MAX_DEPTH` (64): unbounded nesting in a document arriving straight from a
+webview call would otherwise be a reachable stack overflow.
+
+Known limits, stated rather than hidden:
+
+* Text is drawn with cairo's "toy" API, which does no shaping. Latin text is
+  exact; complex scripts and bidirectional text may not shape correctly. A
+  word wider than the measure is split at a UTF-8 character boundary rather than
+  dropped, because losing draft text is the one unacceptable failure.
+* Only titles and draft text are rendered. Attached images and saved map
+  locations are not drawn; that is a separate feature, not a silent omission in
+  this one.
 
 ## Text file transfer
 

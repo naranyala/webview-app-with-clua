@@ -1,10 +1,10 @@
 <script setup>
 /*
- * The application menu: four tool cards, each with a live badge.
+ * The application menu: five tool cards, each with a live badge.
  *
  * Extracted because it is the one pane with no tool state of its own — it only
- * routes — so it needs four badge strings and one emit. That makes the routing
- * surface of the whole app a single readable component instead of 40 lines in
+ * routes — so it needs five badge strings and one emit. That makes the routing
+ * surface of the whole app a single readable component instead of 50 lines in
  * the composition root.
  */
 defineProps({
@@ -12,6 +12,7 @@ defineProps({
   pdfBadge: { type: String, default: '' },
   imagesBadge: { type: String, default: '' },
   outlineBadge: { type: String, default: '' },
+  mapBadge: { type: String, default: '' },
 });
 
 const emit = defineEmits(['select']);
@@ -25,6 +26,14 @@ const emit = defineEmits(['select']);
       <p>Choose a local tool to get started.</p>
     </div>
     <div class="app-grid">
+      <button class="app-card" data-app="toc" type="button" @click="emit('select', 'toc')">
+        <span class="app-icon toc-manager-icon" aria-hidden="true">TOC</span>
+        <span class="app-card-copy">
+          <strong>TOC Manager</strong>
+          <small :title="outlineBadge">{{ outlineBadge }}</small>
+        </span>
+        <span class="app-card-arrow" aria-hidden="true">›</span>
+      </button>
       <button class="app-card" data-app="editor" type="button" @click="emit('select', 'editor')">
         <span class="app-icon text-icon" aria-hidden="true">Aa</span>
         <span class="app-card-copy">
@@ -49,11 +58,11 @@ const emit = defineEmits(['select']);
         </span>
         <span class="app-card-arrow" aria-hidden="true">›</span>
       </button>
-      <button class="app-card" data-app="toc" type="button" @click="emit('select', 'toc')">
-        <span class="app-icon toc-manager-icon" aria-hidden="true">TOC</span>
+      <button class="app-card" data-app="map" type="button" @click="emit('select', 'map')">
+        <span class="app-icon map-icon" aria-hidden="true">MAP</span>
         <span class="app-card-copy">
-          <strong>TOC Manager</strong>
-          <small :title="outlineBadge">{{ outlineBadge }}</small>
+          <strong>Map Explorer</strong>
+          <small :title="mapBadge">{{ mapBadge }}</small>
         </span>
         <span class="app-card-arrow" aria-hidden="true">›</span>
       </button>

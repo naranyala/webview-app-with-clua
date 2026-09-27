@@ -1,7 +1,8 @@
 /*
  * Unit tests for the Image Viewer session: collection normalization, group
- * selection, the badge, the lightbox controls, and both pickers (native and
- * browser directory input).
+ * selection, the badge, the lightbox controls, the remembered-path list, and
+ * every way a directory is opened (native picker, remembered path, browser
+ * directory input).
  */
 
 import assert from 'node:assert/strict';
@@ -14,9 +15,11 @@ import {
   handleLightboxKeydown,
   imageDirectoryInput,
   imageDirectoryName,
+  imageDirectoryPath,
   imageFiles,
   imageGroups,
   imageLoading,
+  imageRecentPaths,
   imageStatus,
   imageStatusError,
   imagesBadge,
@@ -24,12 +27,15 @@ import {
   lightboxIndex,
   loadBrowserImageDirectory,
   openImageDirectory,
+  openImageDirectoryAt,
   openLightbox,
+  rememberImagePath,
   selectedImageGroup,
   setImageCollection,
   setImageStatus,
   visibleImages,
 } from '../src/image-session.js';
+import { MAX_RECENT_PATHS } from '../src/workspace.js';
 
 const originalWindow = globalThis.window;
 
@@ -108,9 +114,6 @@ test('the selected group survives only while it still exists', () => {
 });
 
 test('the menu badge summarizes folder and count', () => {
-  setImageCollection([], 'Holidays');
-  assert.equal(imagesBadge.value, 'Holidays · re-select to reload');
-
   setImageCollection([photo('a.png')], 'Holidays');
   assert.equal(imagesBadge.value, 'Holidays · 1 image');
 
@@ -120,7 +123,112 @@ test('the menu badge summarizes folder and count', () => {
   /* With no folder and no images the card invites the first pick. */
   imageDirectoryName.value = '';
   imageFiles.value = [];
+  imageRecentPaths.value = [];
   assert.equal(imagesBadge.value, 'Browse images grouped by folder');
+});
+
+test('an empty viewer counts remembered directories instead of re-selecting', () => {
+  imageFiles.value = [];
+  imageRecentPaths.value = [];
+  assert.equal(imagesBadge.value, 'Browse images grouped by folder');
+
+  imageRecentPaths.value = ['/photos'];
+  assert.equal(imagesBadge.value, '1 remembered directory');
+
+  imageRecentPaths.value = ['/photos', '/art'];
+  assert.equal(imagesBadge.value, '2 remembered directories');
+});
+
+test('a remembered directory is moved to the front without duplicating it', () => {
+  imageRecentPaths.value = ['/a', '/b'];
+
+  rememberImagePath('/b');
+  assert.deepEqual(imageRecentPaths.value, ['/b', '/a']);
+
+  rememberImagePath('/c');
+  assert.deepEqual(imageRecentPaths.value, ['/c', '/b', '/a']);
+});
+
+test('an empty remembered directory path is ignored', () => {
+  imageRecentPaths.value = ['/a'];
+
+  rememberImagePath('');
+  rememberImagePath('  ');
+  rememberImagePath(undefined);
+
+  assert.deepEqual(imageRecentPaths.value, ['/a']);
+});
+
+test('the remembered directory list stops growing at the schema cap', () => {
+  imageRecentPaths.value = Array.from(
+    { length: MAX_RECENT_PATHS },
+    (_, index) => `/old-${index}`,
+  );
+
+  rememberImagePath('/new');
+
+  assert.equal(imageRecentPaths.value.length, MAX_RECENT_PATHS);
+  assert.equal(imageRecentPaths.value[0], '/new');
+  assert.equal(
+    imageRecentPaths.value.includes(`/old-${MAX_RECENT_PATHS - 1}`),
+    false,
+    'the least recently used entry is the one dropped',
+  );
+  assert.equal(imageRecentPaths.value.includes('/old-0'), true);
+});
+
+test('re-opening a remembered directory asks the host and records the answer', async () => {
+  imageFiles.value = [];
+  imageRecentPaths.value = ['/photos'];
+  const asked = [];
+  globalThis.window = {
+    openImageDirectoryAt: (path) => {
+      asked.push(path);
+      return Promise.resolve({
+        name: 'photos',
+        path,
+        images: [photo('a.png')],
+      });
+    },
+  };
+
+  await openImageDirectoryAt('/photos');
+
+  assert.deepEqual(asked, ['/photos']);
+  assert.equal(imageDirectoryPath.value, '/photos');
+  assert.equal(imageFiles.value.length, 1);
+  assert.deepEqual(imageRecentPaths.value, ['/photos']);
+  assert.equal(imageLoading.value, false);
+  globalThis.window = {};
+});
+
+test('a remembered directory the host cannot scan is dropped', async () => {
+  imageFiles.value = [];
+  imageRecentPaths.value = ['/gone', '/kept'];
+  globalThis.window = {
+    openImageDirectoryAt: () =>
+      Promise.reject({ error: { code: 'NO_IMAGES', message: 'empty' } }),
+  };
+
+  await openImageDirectoryAt('/gone');
+
+  assert.deepEqual(imageRecentPaths.value, ['/kept']);
+  assert.equal(imageLoading.value, false);
+  globalThis.window = {};
+});
+
+test('re-opening a remembered directory is desktop-only', async () => {
+  imageRecentPaths.value = ['/photos'];
+  globalThis.window = {};
+
+  await openImageDirectoryAt('/photos');
+
+  assert.equal(
+    imageStatus.value,
+    'Opening a remembered directory is available in the desktop app.',
+  );
+  assert.deepEqual(imageRecentPaths.value, ['/photos']);
+  globalThis.window = {};
 });
 
 test('the lightbox opens, wraps, and closes over the visible list', () => {

@@ -9,15 +9,24 @@
  * boot cache and the native loadWorkspace/saveWorkspace calls.
  */
 
+import { normalizeLocation } from './map-explorer.js';
 import { getNativeBinding } from './native-bridge.js';
 
 export const WORKSPACE_KEY = 'native-workspace.workspace.v1';
 export const LEGACY_TOC_KEY = 'native-workspace.toc-items.v1';
 export const WORKSPACE_VERSION = 1;
 
-const VIEWS = ['menu', 'editor', 'toc', 'pdf', 'images'];
+const VIEWS = ['menu', 'editor', 'toc', 'pdf', 'images', 'map'];
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
+/*
+ * How many remembered paths each viewer offers. Both lists are re-opened with a
+ * chooser-free native binding, so they are a shortcut list, not a restore: the
+ * cap keeps the persisted workspace small and the panel readable.
+ */
+export const MAX_RECENT_PATHS = 8;
+/* Paths are absolute filesystem paths, so the 4096 bound is generous but finite. */
+const MAX_PATH_LENGTH = 4096;
 /* Exported because attaching an image must respect the cap a read enforces. */
 export const MAX_IMAGES_PER_ITEM = 64;
 
@@ -45,6 +54,25 @@ function asZoom(value) {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 }
 
+/*
+ * A remembered path: absolute, length-capped, de-duplicated, and newest first.
+ * A non-array or a list of junk degrades to an empty list rather than throwing,
+ * so one corrupt field cannot cost the user the rest of the workspace.
+ */
+export function normalizeRecentPaths(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const paths = [];
+  for (const entry of raw) {
+    const path = asString(entry, MAX_PATH_LENGTH);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+    if (paths.length >= MAX_RECENT_PATHS) break;
+  }
+  return paths;
+}
+
 export function countWords(text) {
   const trimmed = String(text ?? '').trim();
   return trimmed === '' ? 0 : trimmed.split(/\s+/).length;
@@ -65,6 +93,13 @@ export function normalizeLinks(raw) {
     pdfPage: asPage(links.pdfPage),
     pdfName: asString(links.pdfName, 200),
     images,
+    /*
+     * One optional place, not a list: a section is written about a location, and
+     * the explorer pins a single point. normalizeLocation() is the same
+     * validator the map uses, so a hand-edited outline cannot put NaN on the
+     * map, and a corrupt record simply reads as "no location".
+     */
+    location: normalizeLocation(links.location),
   };
 }
 
@@ -118,11 +153,19 @@ function normalizePdfSession(raw) {
   const pdf = raw && typeof raw === 'object' ? raw : {};
   return {
     name: asString(pdf.name, 200),
+    path: asString(pdf.path, MAX_PATH_LENGTH),
+    recentPaths: normalizeRecentPaths(pdf.recentPaths),
     size: Math.max(0, Math.floor(Number(pdf.size) || 0)),
     url: asString(pdf.url, 4096),
     documentId: asString(pdf.documentId, 128),
     page: asPage(pdf.page) ?? 1,
     zoom: asZoom(pdf.zoom),
+    /*
+     * The one workspace folder the combined outline is written to. Display only:
+     * the host owns the real path and re-asks after a fresh process, so a stale
+     * value here can mislead but cannot cause a write somewhere unexpected.
+     */
+    workspaceDirectory: asString(pdf.workspaceDirectory, MAX_PATH_LENGTH),
   };
 }
 
@@ -130,6 +173,8 @@ function normalizeImageSession(raw) {
   const images = raw && typeof raw === 'object' ? raw : {};
   return {
     directoryName: asString(images.directoryName, 200),
+    directoryPath: asString(images.directoryPath, MAX_PATH_LENGTH),
+    recentPaths: normalizeRecentPaths(images.recentPaths),
     selectedGroup: asString(images.selectedGroup, 200) || 'All Images',
   };
 }

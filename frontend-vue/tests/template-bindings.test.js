@@ -51,7 +51,10 @@ test('Every template identifier resolves to a script-setup binding', () => {
     'countWords',
     'documentTitle',
     'workspaceReport',
-    'resumePdfSession',
+    'openPdfAt',
+    'openImageDirectoryAt',
+    'pdfRecentPaths',
+    'imageRecentPaths',
   ]) {
     assert.ok(referenced.includes(name), `template never used ${name}`);
   }

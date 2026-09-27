@@ -22,12 +22,17 @@ function fakeSessions() {
     linkTargetId: ref(null),
     editorContent: ref('draft text'),
     pdfName: ref('No document selected'),
+    pdfPath: ref(''),
+    pdfRecentPaths: ref([]),
     pdfSessionSize: ref(0),
     pdfSourceUrl: ref(''),
     pdfDocumentId: ref(''),
     pdfPageNumber: ref(1),
     pdfZoom: ref(1.25),
+    workspaceDirectory: ref('/home/writer/outline'),
     imageDirectoryName: ref('shots'),
+    imageDirectoryPath: ref('/photos'),
+    imageRecentPaths: ref([]),
     selectedImageGroup: ref('All Images'),
   };
 }
@@ -88,7 +93,7 @@ function fakeTimers() {
 
 function build(store, timers, options = {}) {
   return createWorkspacePersistence({
-    sessions: fakeSessions(),
+    sessions: options.sessions ?? fakeSessions(),
     store,
     boot: { savedAt: 0 },
     now: () => 1_700_000_000_000,
@@ -110,14 +115,34 @@ describe('the snapshot', () => {
       editor: { content: 'draft text' },
       pdf: {
         name: 'No document selected',
+        path: '',
+        recentPaths: [],
         size: 0,
         url: '',
         documentId: '',
         page: 1,
         zoom: 1.25,
+        workspaceDirectory: '/home/writer/outline',
       },
-      images: { directoryName: 'shots', selectedGroup: 'All Images' },
+      images: {
+        directoryName: 'shots',
+        directoryPath: '/photos',
+        recentPaths: [],
+        selectedGroup: 'All Images',
+      },
     });
+  });
+
+  test('remembers the paths a viewer has been given', () => {
+    const sessions = fakeSessions();
+    sessions.pdfRecentPaths.value = ['/docs/handbook.pdf'];
+    sessions.imageRecentPaths.value = ['/photos', '/art'];
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    const snapshot = engine.snapshot();
+
+    assert.deepEqual(snapshot.pdf.recentPaths, ['/docs/handbook.pdf']);
+    assert.deepEqual(snapshot.images.recentPaths, ['/photos', '/art']);
   });
 
   test('stamps savedAt from the injected clock', () => {

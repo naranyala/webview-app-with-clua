@@ -189,6 +189,145 @@ static void test_read_zero_count(void) {
     assert(json_read_string_array(NULL, 0, values, NULL) == JSON_ERR_NULL);
 }
 
+/* --- reading general JSON -------------------------------------------------- */
+
+static void test_parse_scalars(void) {
+    json_result status = JSON_ERR_MALFORMED;
+    json_value *root = json_parse("null", &status);
+    assert(root != NULL && root->type == JSON_VALUE_NULL && status == JSON_OK);
+    json_value_free(root);
+
+    root = json_parse("true", &status);
+    assert(json_bool(root, 0) == 1);
+    json_value_free(root);
+
+    root = json_parse("false", &status);
+    assert(json_bool(root, 1) == 0);
+    json_value_free(root);
+
+    root = json_parse("42", &status);
+    assert(json_number(root, -1) == 42.0);
+    json_value_free(root);
+
+    root = json_parse("-1.5e2", &status);
+    assert(json_number(root, 0) == -150.0);
+    json_value_free(root);
+}
+
+static void test_parse_object_and_lookups(void) {
+    json_result status = JSON_ERR_MALFORMED;
+    json_value *root = json_parse(
+        "{\"format\":\"metrics-toc\",\"version\":1,\"items\":[{\"title\":\"One\"}]}",
+        &status);
+    assert(root != NULL && root->type == JSON_VALUE_OBJECT && status == JSON_OK);
+    assert_string_equals(json_string(json_object_get(root, "format"), NULL), "metrics-toc");
+    assert(json_number(json_object_get(root, "version"), 0) == 1.0);
+    assert(json_object_get(root, "absent") == NULL);
+    assert_string_equals(json_string(json_object_get(root, "absent"), "fallback"), "fallback");
+    assert(json_count(json_object_get(root, "items")) == 1);
+    json_value_free(root);
+}
+
+static void test_parse_nested_arrays(void) {
+    json_result status = JSON_ERR_MALFORMED;
+    json_value *root = json_parse("[[1,2],[3]]", &status);
+    assert(root != NULL && root->type == JSON_VALUE_ARRAY);
+    assert(json_count(root) == 2);
+    assert(json_count(json_at(root, 0)) == 2);
+    assert(json_number(json_at(json_at(root, 0), 1), 0) == 2.0);
+    assert(json_count(json_at(root, 1)) == 1);
+    assert(json_at(root, 9) == NULL); /* out of range is NULL, not a fault */
+    json_value_free(root);
+}
+
+static void test_parse_strings_decode_escapes(void) {
+    json_result status = JSON_ERR_MALFORMED;
+    json_value *root = json_parse("\"a\\nb\\u00e9\\ud83d\\ude00\"", &status);
+    assert(root != NULL && status == JSON_OK);
+    assert_string_equals(json_string(root, NULL), "a\nb\xc3\xa9\xf0\x9f\x98\x80");
+    json_value_free(root);
+}
+
+static void test_parse_whitespace_and_empty_containers(void) {
+    json_result status = JSON_ERR_MALFORMED;
+    json_value *root = json_parse("  {\n \"a\" : [ ] ,\n \"b\" : { } \n}  ", &status);
+    assert(root != NULL && status == JSON_OK);
+    assert(json_count(json_object_get(root, "a")) == 0);
+    assert(json_count(json_object_get(root, "b")) == 0);
+    json_value_free(root);
+}
+
+static void test_parse_rejects_malformed(void) {
+    json_result status = JSON_OK;
+    const char *bad[] = {
+        "",          /* empty */
+        "{",         /* unterminated */
+        "[1,]",      /* trailing comma */
+        "{\"a\":}",  /* missing value */
+        "{a:1}",     /* unquoted key */
+        "tru",       /* truncated literal */
+        "1 2",       /* trailing content */
+        "{} {}",     /* two documents */
+        "\"unterminated",
+        "1.",        /* JSON needs a digit after the point */
+        "1e",        /* and after the exponent */
+    };
+    for (size_t index = 0; index < sizeof(bad) / sizeof(bad[0]); index++) {
+        json_value *root = json_parse(bad[index], &status);
+        assert(root == NULL);
+        assert(status != JSON_OK);
+    }
+    assert(json_parse(NULL, &status) == NULL);
+    assert(status == JSON_ERR_NULL);
+}
+
+/*
+ * The depth bound is a security property, not a style choice: this parser is
+ * recursive, and the input arrives straight from a webview call.
+ */
+static void test_parse_bounds_nesting_depth(void) {
+    json_result status = JSON_OK;
+    GString *deep = g_string_new(NULL);
+    for (int index = 0; index < JSON_MAX_DEPTH + 10; index++) g_string_append_c(deep, '[');
+    for (int index = 0; index < JSON_MAX_DEPTH + 10; index++) g_string_append_c(deep, ']');
+
+    assert(json_parse(deep->str, &status) == NULL); /* over-deep nesting is refused */
+    assert(status != JSON_OK);
+    g_string_free(deep, TRUE);
+
+    /* Just inside the bound still parses, so the limit is not off by one. */
+    GString *shallow = g_string_new(NULL);
+    for (int index = 0; index < JSON_MAX_DEPTH; index++) g_string_append_c(shallow, '[');
+    for (int index = 0; index < JSON_MAX_DEPTH; index++) g_string_append_c(shallow, ']');
+    json_value *root = json_parse(shallow->str, &status);
+    assert(root != NULL && status == JSON_OK);
+    json_value_free(root);
+    g_string_free(shallow, TRUE);
+}
+
+static void test_accessors_tolerate_wrong_types(void) {
+    json_result status = JSON_OK;
+    json_value *root = json_parse("{\"n\":5,\"s\":\"x\",\"a\":[1]}", &status);
+    const json_value *number = json_object_get(root, "n");
+    const json_value *text = json_object_get(root, "s");
+    const json_value *array = json_object_get(root, "a");
+
+    /* Every accessor answers with its fallback instead of faulting. */
+    assert_string_equals(json_string(number, "fallback"), "fallback");
+    assert(json_number(text, -1) == -1.0);
+    assert(json_bool(number, 9) == 9);
+    assert(json_count(text) == 0); /* a string is not a container */
+    assert(json_count(NULL) == 0);
+    assert(json_at(text, 0) == NULL);
+    assert(json_string(NULL, "d") != NULL && strcmp(json_string(NULL, "d"), "d") == 0);
+    assert(json_number(NULL, 7) == 7.0);
+    assert(json_object_get(root, NULL) == NULL);
+    assert(json_object_get(text, "n") == NULL); /* a string is not an object */
+    assert(json_number(json_at(array, 0), 0) == 1.0);
+    json_value_free(root);
+    json_value_free(NULL);
+}
+
 int main(void) {
     test_append_string();
     test_append_error();
@@ -202,6 +341,15 @@ int main(void) {
     test_read_rejects_raw_control_bytes();
     test_read_rejects_malformed();
     test_read_zero_count();
+
+    test_parse_scalars();
+    test_parse_object_and_lookups();
+    test_parse_nested_arrays();
+    test_parse_strings_decode_escapes();
+    test_parse_whitespace_and_empty_containers();
+    test_parse_rejects_malformed();
+    test_parse_bounds_nesting_depth();
+    test_accessors_tolerate_wrong_types();
 
     printf("All JSON codec tests passed\n");
     return 0;

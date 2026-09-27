@@ -17,8 +17,10 @@ frontend-vue/
 ├── src/workspace-report.js      persistence report -> header sentence
 ├── src/editor-session.js        Text Editor buffer, caret, word count, notice
 ├── src/app-shell.js             active view and transition hooks
-├── src/pdf-session.js           PDF load, render, paging, resume, heading panel
+├── src/pdf-session.js           PDF load, render, paging, path history, heading panel
 ├── src/image-session.js         folder selection, grouping, lightbox
+├── src/map-explorer.js          Web Mercator tiles, pan/zoom, and the pin
+├── src/outline-pdf.js           workspace folder, combine action, generated file
 ├── src/toc-outline.js           outline items and cross-tool links
 ├── src/workspace.js             persistent workspace store and outline schema
 ├── src/index.css                workspace layout and visual styling
@@ -44,9 +46,11 @@ template. Everything else lives in one module per concern:
 | `workspace-persistence.js` | the persistence engine: snapshot, `apply`, `persist`, `flush`, `schedule`, `hydrate`, and the mode — every dependency injected |
 | `editor-session.js` | `editorContent`, the caret readout, the word counter, and the transfer notice |
 | `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
-| `pdf-session.js` | document loading, the canvas registry, paging, resume, and the heading panel |
+| `pdf-session.js` | document loading, the canvas registry, paging, the remembered-path list, and the heading panel |
 | `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
-| `toc-outline.js` | outline items, linking to pages and images, draft sync, and JSON/text import/export |
+| `map-explorer.js` | the Web Mercator projection, the visible tile grid, pan/zoom, the pin, and `normalizeLocation()` — the one validator a stored place goes through |
+| `toc-outline.js` | outline items, linking to pages, images, and places, draft sync, and JSON/text import/export |
+| `outline-pdf.js` | the one workspace folder, `renderOutlinePdf`, and the generated file's identity — the host owns the folder, so the webview never names a path to write into |
 
 Dependencies point one way: the modules import `workspace.js` and
 `native-bridge.js`, and `App.vue` imports the modules. A module that needs
@@ -176,7 +180,7 @@ The four cards read and write one persisted record instead of isolated state:
    identical payloads. The editor footer reports where state went: `saved to
    disk`, `auto-saved`, or `not saved`.
 4. The menu cards replace their static subtitles with live badges
-   (`outlineBadge`, `editorBadge`, `pdfBadge`, `imagesBadge`).
+   (`outlineBadge`, `editorBadge`, `pdfBadge`, `imagesBadge`, `mapBadge`).
 5. The PDF sidepanel links the current page to an outline item
    (`attachPdfPageToToc`), imports extracted headings as items
    (`importPdfHeadingsToToc`), and the outline row and editor top bar jump back
@@ -184,19 +188,83 @@ The four cards read and write one persisted record instead of isolated state:
 6. The image lightbox attaches the previewed image to a section
    (`attachImageToToc`); the outline row shows an `IMG n` badge and
    `openLinkedImages` resolves it, or reports the folder as not loaded.
-7. The last PDF (name, size, `file://` source, document id, page, zoom) and the
-   last image folder are restored on boot. `resumePdfSession()` re-renders the
-   saved page when the source is still reachable, otherwise the reader shows a
-   `Resume session` prompt with the saved position.
+7. The PDF reader and the Image Viewer never restore content on boot. Each
+   remembers the paths it has opened (`recentPaths`, newest first, capped at
+   `MAX_RECENT_PATHS`) and shows them in its empty state; picking an entry calls
+   `openPdfAt` / `openImageDirectoryAt`, which open that absolute path with no
+   chooser. A path the host can no longer open is dropped from the list, so the
+   history heals itself. The editor's "jump to page" link follows the same rule:
+   with nothing open it re-opens the document the link came from.
+8. The Map Explorer links its pin to an outline item (`attachLocationToToc`);
+   the outline row shows a `LOC` badge and `openLinkedLocation` re-centres the
+   map on the saved place. Unlike an image link, a location link is
+   self-contained, so it resolves on any later launch with no folder to
+   re-select.
+
+## OpenStreetMap Explorer
+
+The fifth tool is a dependency-free tiled map. It adds no runtime package: the
+projection is the standard Web Mercator formula, and the tiles are ordinary
+`<img>` elements positioned by `visibleTiles()`.
+
+1. `projectToPixel` / `unprojectFromPixel` convert between coordinates and
+   global pixels, and `lonToTileX` / `latToTileY` give the fractional tile
+   index. The tests pin these against known slippy-map tile numbers (San
+   Francisco at z12 is 655/1583) rather than against the implementation.
+2. `visibleTiles()` returns the tiles covering the viewport, each already
+   offset in CSS pixels from its top-left corner, so the projection does the
+   scrolling and the DOM only positions absolute images.
+3. Dragging pans by unprojecting the pixel delta; the wheel zooms toward the
+   cursor. `zoomMap` unprojects the anchor at the old zoom, reprojects it at the
+   new one, and solves backwards for the centre — without the half-viewport term
+   the anchor drifts by half a screen per zoom step.
+4. A press and release within `CLICK_SLOP_PX` of each other drops the pin;
+   anything further is a pan. The threshold is measured from where the press
+   started, not from the last move, so a drag made of many small steps is still
+   a drag.
+5. The pane is `v-show`n, so it has no measurable size until the view is first
+   entered. App.vue starts the `ResizeObserver` and measures on entry; with no
+   size the tile list is empty and the pane says so rather than showing a blank
+   grid.
+6. There is no place search. Nominatim would need a second network dependency
+   and an identifying User-Agent the embedded WebView cannot send, and
+   Nominatim's usage policy is not satisfied by a bundled desktop app. Picking a
+   point needs nothing but the tiles.
+
+Tiles come from `openstreetmap.org` and the attribution is rendered
+permanently, not faded. A build distributed to many machines should point
+`tileUrl` at its own tile server; the public server's usage policy asks for an
+identifying User-Agent and forbids bulk downloading.
+
+## Combining the outline into one PDF
+
+The TOC Manager toolbar has two new controls. **Workspace folder…** asks the host
+for the single directory the combined file lives in; the host remembers the
+choice, so the webview cannot name a write target itself. **Combine to PDF**
+sends the outline to the host, which renders it and answers with the written
+file's path, page count, and size. A **Preview** button then opens that file in
+the existing PDF reader with `openPdfAt`.
+
+The payload is `exportTocJson()` — the same versioned envelope the Export button
+writes — so an export and a combined PDF can never disagree about what the
+outline contains. Nothing is held in memory between the two steps: the PDF is a
+file, and the preview opens it by path like any other document.
+
+The folder is stored in the workspace schema as `pdf.workspaceDirectory`, but
+only for display. The host owns the real path and re-asks after a fresh process,
+so a stale stored value can mislead without ever causing a write somewhere the
+user did not choose.
 
 ## Bridge integration
 
 The frontend checks these native bindings in order:
 
 1. `window.openPdf` for system PDF selection.
-2. `window.openImageDirectory` for system directory selection.
-3. `window.extractPdfToc` for headings and cached TOC data.
-4. `window.__webview__.call` as a compatibility fallback.
+2. `window.openPdfAt` to open a remembered path without a chooser.
+3. `window.openImageDirectory` for system directory selection.
+4. `window.openImageDirectoryAt` to re-scan a remembered directory.
+5. `window.extractPdfToc` for headings and cached TOC data.
+6. `window.__webview__.call` as a compatibility fallback.
 
 The native `summarize` binding is still registered by the C host and covered by
 `make bridge-test`, but the current UI no longer calls it.

@@ -54,4 +54,85 @@ json_result json_read_string_array(const char *request, size_t count,
 /* Frees a values array filled by json_read_string_array(). */
 void json_free_values(char **values, size_t count);
 
+/*
+ * --- reading general JSON -------------------------------------------------
+ *
+ * The array reader above is deliberately narrow: it only understands
+ * ["a","b"], which is all the text transfers need. The outline renderer needs
+ * to walk a whole document the webview serializes, so this is the same codec
+ * grown a general value tree. It stays in this module so there is still exactly
+ * one place that decides what valid JSON is and how a string is escaped.
+ *
+ * A parsed document is a tree the caller owns and must release with
+ * json_value_free(). Every accessor takes a possibly-wrong node and returns a
+ * safe default rather than a fault, so a caller can walk an untrusted document
+ * without checking types at every step.
+ */
+
+typedef enum {
+    JSON_VALUE_NULL,
+    JSON_VALUE_BOOL,
+    JSON_VALUE_NUMBER,
+    JSON_VALUE_STRING,
+    JSON_VALUE_ARRAY,
+    JSON_VALUE_OBJECT
+} json_value_type;
+
+typedef struct json_value json_value;
+
+/* One key/value pair of an object; arrays keep the same nodes in `items`. */
+typedef struct {
+    char *name;
+    json_value *value;
+} json_member;
+
+struct json_value {
+    json_value_type type;
+    int boolean;
+    double number;
+    /* Decoded and NUL-terminated for JSON_VALUE_STRING, else NULL. */
+    char *text;
+    /* Object pairs, or NULL. */
+    json_member *members;
+    /* Array elements, or NULL. */
+    json_value **items;
+    size_t count;
+};
+
+/*
+ * Deepest nesting accepted. A recursive-descent parser on attacker-supplied
+ * bytes needs a bound, or a document of ten thousand open brackets takes the
+ * process down with a stack overflow - a crash reachable straight from a
+ * webview call. The workspace outline never nests past a handful of levels.
+ */
+#define JSON_MAX_DEPTH 64
+
+/*
+ * Parses a complete JSON document. Returns NULL and sets *result on failure;
+ * on success *result is JSON_OK. Trailing content after the value is an error,
+ * so a truncated or doubled document is rejected instead of half-read.
+ */
+json_value *json_parse(const char *text, json_result *result);
+
+/* Releases a tree from json_parse(). Safe on NULL. */
+void json_value_free(json_value *value);
+
+/* The member with this name in an object, or NULL (including on a non-object). */
+const json_value *json_object_get(const json_value *object, const char *name);
+
+/* The string at a node, or fallback when it is not a string. */
+const char *json_string(const json_value *value, const char *fallback);
+
+/* The number at a node, or fallback when it is not a number. */
+double json_number(const json_value *value, double fallback);
+
+/* The boolean at a node, or fallback when it is not a boolean. */
+int json_bool(const json_value *value, int fallback);
+
+/* Element count of an array or object, 0 for anything else. */
+size_t json_count(const json_value *value);
+
+/* The index'th element of an array, or NULL when out of range. */
+const json_value *json_at(const json_value *array, size_t index);
+
 #endif /* JSON_IO_H */

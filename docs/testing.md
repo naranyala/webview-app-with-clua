@@ -84,6 +84,28 @@ Run:
 make pdf-toc-test
 ```
 
+### Combined outline PDF tests
+
+[`tests/test_outline_pdf.c`](../tests/test_outline_pdf.c) drives the
+`chooseOutlineDirectory` / `renderOutlinePdf` bindings with the webview calls
+replaced by recording stubs, so no GUI is involved. It covers the suggested-name
+sanitizer (traversal, absolute paths, backslashes, reserved characters, dots
+only, an over-long name), the refusal to write before a folder has been chosen,
+the rejection of malformed and non-object outlines, level clamping, items with
+no title, pagination of a long document, and that a word too wide for the
+measure is split rather than dropped.
+
+Cairo is linked for real, not mocked: "is this actually a PDF" and "does the page
+count go up" cannot be answered honestly against a fake surface. Every case
+checks the `%PDF-` header of the file cairo wrote. The suite needs cairo and
+glib, which `make check-cairo` verifies.
+
+Run:
+
+```sh
+make outline-pdf-test
+```
+
 ### Text transfer tests
 
 [`tests/test_text_transfer.c`](../tests/test_text_transfer.c) covers the

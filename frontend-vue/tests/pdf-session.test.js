@@ -1,7 +1,7 @@
 /*
  * Unit tests for the PDF Reader session: the menu badge, status messages,
- * page navigation and scroll math, the canvas registry, session resume, and
- * the heading-extraction panel (with and without a host binding).
+ * page navigation and scroll math, the canvas registry, the remembered-path
+ * list, and the heading-extraction panel (with and without a host binding).
  *
  * Rendering itself needs a real PDF.js document and a DOM, so these cases
  * cover everything around it with a fake document and fake elements.
@@ -17,18 +17,19 @@ import {
   handlePdfScroll,
   loadPdfToc,
   navigateToPage,
+  openPdfAt,
   pdfBadge,
   pdfContentElement,
   pdfDocument,
-  pdfLoading,
   pdfName,
   pdfPageCanvases,
   pdfPageCount,
   pdfPageNumber,
-  pdfSourceUrl,
+  pdfPath,
+  pdfRecentPaths,
   pdfStatus,
   pdfStatusError,
-  resumePdfSession,
+  rememberPdfPath,
   scrollToPdfPage,
   setPdfPageCanvas,
   setPdfStatus,
@@ -39,6 +40,7 @@ import {
   tocMessage,
   tocState,
 } from '../src/pdf-session.js';
+import { MAX_RECENT_PATHS } from '../src/workspace.js';
 
 const originalWindow = globalThis.window;
 
@@ -67,12 +69,11 @@ function fakeDocument(numPages) {
 test('the menu badge reflects the session', () => {
   pdfDocument.value = null;
   pdfName.value = 'No document selected';
+  pdfRecentPaths.value = [];
   assert.equal(pdfBadge.value, 'Open a PDF from your local system');
 
   pdfName.value = 'handbook.pdf';
   pdfPageNumber.value = 4;
-  assert.equal(pdfBadge.value, 'Resume handbook.pdf · page 4');
-
   pdfDocument.value = fakeDocument(12);
   pdfPageCount.value = 0;
   assert.equal(pdfBadge.value, 'handbook.pdf');
@@ -291,30 +292,106 @@ test('an empty or failed extraction reports why', async () => {
   globalThis.window = {};
 });
 
-test('resuming explains a source that is no longer reachable', async () => {
+test('the badge counts remembered documents instead of promising a resume', () => {
   pdfDocument.value = null;
-  pdfLoading.value = false;
-  pdfName.value = 'handbook.pdf';
-  pdfSourceUrl.value = 'https://example.invalid/handbook.pdf';
-  pdfPageNumber.value = 6;
-  setPdfStatus('ready');
+  pdfName.value = 'No document selected';
+  pdfRecentPaths.value = [];
+  assert.equal(pdfBadge.value, 'Open a PDF from your local system');
 
-  await resumePdfSession();
+  pdfRecentPaths.value = ['/docs/handbook.pdf'];
+  assert.equal(pdfBadge.value, '1 remembered document');
 
-  assert.equal(pdfStatus.value, 'Re-open handbook.pdf to resume at page 6.');
-  assert.equal(pdfStatusError.value, false);
-  assert.equal(pdfDocument.value, null);
+  pdfRecentPaths.value = ['/docs/handbook.pdf', '/docs/manual.pdf'];
+  assert.equal(pdfBadge.value, '2 remembered documents');
 });
 
-test('resuming does nothing without a stored document', async () => {
+test('a remembered path is moved to the front without duplicating it', () => {
+  pdfRecentPaths.value = ['/a.pdf', '/b.pdf'];
+
+  rememberPdfPath('/b.pdf');
+  assert.deepEqual(pdfRecentPaths.value, ['/b.pdf', '/a.pdf']);
+
+  rememberPdfPath('/c.pdf');
+  assert.deepEqual(pdfRecentPaths.value, ['/c.pdf', '/b.pdf', '/a.pdf']);
+});
+
+test('an empty or missing path is never remembered', () => {
+  pdfRecentPaths.value = ['/a.pdf'];
+
+  rememberPdfPath('');
+  rememberPdfPath('   ');
+  rememberPdfPath(null);
+
+  assert.deepEqual(pdfRecentPaths.value, ['/a.pdf']);
+});
+
+test('the remembered list stops growing at the schema cap', () => {
+  pdfRecentPaths.value = Array.from(
+    { length: MAX_RECENT_PATHS },
+    (_, index) => `/old-${index}.pdf`,
+  );
+
+  rememberPdfPath('/new.pdf');
+
+  assert.equal(pdfRecentPaths.value.length, MAX_RECENT_PATHS);
+  assert.equal(pdfRecentPaths.value[0], '/new.pdf');
+  assert.equal(
+    pdfRecentPaths.value.includes(`/old-${MAX_RECENT_PATHS - 1}.pdf`),
+    false,
+    'the least recently used entry is the one dropped',
+  );
+  assert.equal(pdfRecentPaths.value.includes('/old-0.pdf'), true);
+});
+
+test('opening a remembered path asks the host and records the answer', async () => {
   pdfDocument.value = null;
-  pdfLoading.value = false;
-  pdfName.value = 'No document selected';
-  setPdfStatus('idle');
+  pdfRecentPaths.value = ['/docs/handbook.pdf'];
+  const asked = [];
+  globalThis.window = {
+    openPdfAt: (path) => {
+      asked.push(path);
+      return Promise.resolve({
+        name: 'handbook.pdf',
+        path,
+        size: 2048,
+        url: 'file:///docs/handbook.pdf',
+      });
+    },
+  };
 
-  await resumePdfSession();
+  await openPdfAt('/docs/handbook.pdf');
 
-  assert.equal(pdfStatus.value, 'idle');
+  assert.deepEqual(asked, ['/docs/handbook.pdf']);
+  assert.equal(pdfPath.value, '/docs/handbook.pdf');
+  assert.deepEqual(pdfRecentPaths.value, ['/docs/handbook.pdf']);
+  globalThis.window = {};
+});
+
+test('a remembered path the host cannot open is dropped from the list', async () => {
+  pdfRecentPaths.value = ['/gone.pdf', '/kept.pdf'];
+  globalThis.window = {
+    openPdfAt: () =>
+      Promise.reject({ error: { code: 'INVALID_PDF', message: 'gone' } }),
+  };
+
+  await openPdfAt('/gone.pdf');
+
+  assert.deepEqual(pdfRecentPaths.value, ['/kept.pdf']);
+  globalThis.window = {};
+});
+
+test('opening a remembered path is desktop-only', async () => {
+  pdfRecentPaths.value = ['/docs/handbook.pdf'];
+  globalThis.window = {};
+
+  await openPdfAt('/docs/handbook.pdf');
+
+  assert.equal(
+    pdfStatus.value,
+    'Opening a remembered path is available in the desktop app.',
+  );
+  assert.deepEqual(pdfRecentPaths.value, ['/docs/handbook.pdf']);
+  globalThis.window = {};
 });
 
 test('disposing the session cancels renders and frees the document', () => {

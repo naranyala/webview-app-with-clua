@@ -117,34 +117,81 @@ static void scan_image_directory(const char *directory, const char *relative, in
 }
 
 /*
- * Runs on the GTK main loop after dispatch_picker(): pick a folder, scan it,
- * and answer with {"images":[...],"name":...,"limited":...} or NO_IMAGES.
+ * Scans a chosen directory and answers with
+ * {"images":[...],"name":...,"path":...,"limited":...} or NO_IMAGES. Shared by
+ * the chooser and the path-binding so both entry points enforce the same scan
+ * budgets and report the same errors.
+ *
+ * path is borrowed; every failure is reported here rather than returned.
+ */
+static void answer_image_directory(webview_t view, const char *request_id, const char *path) {
+    image_scan_result scan = { .json = g_string_new("{\"images\":[") };
+    char *directory_name = NULL;
+
+    scan_image_directory(path, "", 0, &scan);
+    directory_name = g_path_get_basename(path);
+    g_string_append_c(scan.json, ']');
+    g_string_append(scan.json, ",\"name\":");
+    json_append_string(scan.json, directory_name);
+    /*
+     * "path" is what the webview records in its recent-directories history, so
+     * a remembered entry can be re-scanned without the chooser.
+     */
+    g_string_append(scan.json, ",\"path\":");
+    json_append_string(scan.json, path);
+    g_string_append_printf(scan.json, ",\"limited\":%s}", scan.limited ? "true" : "false");
+    if (scan.count == 0) {
+        return_native_error(view, request_id, "NO_IMAGES",
+            "No supported images were found within the directory limits.");
+    } else {
+        webview_return(view, request_id, 0, scan.json->str);
+    }
+    g_free(directory_name);
+    g_string_free(scan.json, TRUE);
+}
+
+/*
+ * Runs on the GTK main loop after dispatch_picker(): pick a folder, then hand
+ * the choice to the shared answer path.
  */
 static void show_image_directory_picker(webview_t view, void *argument) {
     picker_request *request = argument;
     char *selected_path = run_path_chooser(view, PICKER_SELECT_FOLDER, "Choose Image Directory", NULL, NULL);
+
     if (selected_path == NULL) {
         webview_return(view, request->request_id, 0, "{\"canceled\":true}");
-        goto cleanup;
-    }
-
-    image_scan_result scan = { .json = g_string_new("{\"images\":[") };
-    scan_image_directory(selected_path, "", 0, &scan);
-    char *directory_name = g_path_get_basename(selected_path);
-    g_string_append_c(scan.json, ']');
-    g_string_append(scan.json, ",\"name\":");
-    json_append_string(scan.json, directory_name);
-    g_string_append_printf(scan.json, ",\"limited\":%s}", scan.limited ? "true" : "false");
-    if (scan.count == 0) {
-        return_native_error(view, request->request_id, "NO_IMAGES", "No supported images were found within the directory limits.");
     } else {
-        webview_return(view, request->request_id, 0, scan.json->str);
+        answer_image_directory(view, request->request_id, selected_path);
     }
-    g_free(directory_name);
-    g_string_free(scan.json, TRUE);
-
-cleanup:
     g_free(selected_path);
+    picker_request_release(request);
+}
+
+/*
+ * Runs on the GTK main loop after dispatch_picker_with_payload(): scan the
+ * directory the webview named, with no chooser. The path is decoded through the
+ * shared JSON codec, so it is validated exactly like any other binding payload,
+ * and must be absolute - a relative path would silently resolve against the
+ * host's working directory. A path that is not a directory scans to nothing and
+ * is reported as NO_IMAGES, the same as an empty folder.
+ */
+static void open_image_directory_at_path(webview_t view, void *argument) {
+    picker_request *request = argument;
+    char *values[1] = { NULL };
+    json_result decoded = request->payload == NULL
+        ? JSON_ERR_NULL
+        : json_read_string_array(request->payload, 1, values, NULL);
+
+    if (decoded != JSON_OK) {
+        return_native_error(view, request->request_id, "INVALID_PATH",
+            "The directory path could not be read.");
+    } else if (!g_path_is_absolute(values[0])) {
+        return_native_error(view, request->request_id, "INVALID_PATH",
+            "The directory path must be absolute.");
+    } else {
+        answer_image_directory(view, request->request_id, values[0]);
+    }
+    json_free_values(values, 1);
     picker_request_release(request);
 }
 
@@ -152,4 +199,22 @@ void on_open_image_directory(const char *id, const char *request, void *argument
     app_context *app = argument;
     (void)request;
     dispatch_picker(app, id, show_image_directory_picker, "image directory picker");
+}
+
+void on_open_image_directory_at(const char *id, const char *request, void *argument) {
+    app_context *app = argument;
+    char *payload = NULL;
+
+    if (request == NULL) {
+        return_native_error(app->view, id, "INVALID_PATH",
+            "The directory path could not be read.");
+        return;
+    }
+    payload = g_strdup(request);
+    if (payload == NULL) {
+        return_native_error(app->view, id, "INTERNAL_ERROR",
+            "The directory request could not be prepared.");
+        return;
+    }
+    dispatch_picker_with_payload(app, id, open_image_directory_at_path, "image directory request", payload);
 }

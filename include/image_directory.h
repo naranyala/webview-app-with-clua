@@ -17,4 +17,12 @@
 /* Binds "openImageDirectory". */
 void on_open_image_directory(const char *id, const char *request, void *argument);
 
+/*
+ * Binds "openImageDirectoryAt": scans the absolute path given as the request's
+ * only argument, with no chooser, and answers with the same payload as
+ * on_open_image_directory. This is what a re-selected entry of the webview's
+ * recent-directories list calls.
+ */
+void on_open_image_directory_at(const char *id, const char *request, void *argument);
+
 #endif /* IMAGE_DIRECTORY_H */

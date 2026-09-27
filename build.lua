@@ -246,7 +246,7 @@ end
 
 -- profile -> compile flags and libraries. A new profile needs an entry here,
 -- one in tools/tests-manifest.awk, and one in CMakeLists.txt.
-local function test_profile_flags(profile, glib, gtk, stub_dir)
+local function test_profile_flags(profile, glib, gtk, cairo, stub_dir)
   if profile == "core" then
     return { flags = {}, libraries = { "-lm" } }
   elseif profile == "glib" or profile == "glib-math" then
@@ -266,6 +266,24 @@ local function test_profile_flags(profile, glib, gtk, stub_dir)
       defines = { [[PDFTOTEXT_EXECUTABLE='"pdftotext"']] },
       libraries = glib.libraries,
     }
+  elseif profile == "cairo" then
+    -- GTK because the suite links app_support.c for the shared chooser; m for
+    -- lround, which the link needs named.
+    local libraries = { "-lm" }
+    for _, library in ipairs(cairo.libraries) do
+      table.insert(libraries, library)
+    end
+    for _, library in ipairs(gtk.libraries) do
+      table.insert(libraries, library)
+    end
+    local flags = {}
+    for _, flag in ipairs(gtk.flags) do
+      table.insert(flags, flag)
+    end
+    for _, flag in ipairs(cairo.flags) do
+      table.insert(flags, flag)
+    end
+    return { flags = flags, includes = { stub_dir }, libraries = libraries }
   end
   fail("Unknown test profile: " .. profile)
 end
@@ -287,6 +305,13 @@ local function build_c_tests()
   if #glib.libraries == 0 then
     fail("GLib development package not found: pkg-config glib-2.0")
   end
+  -- Cairo writes the combined-outline PDF. It is already present transitively
+  -- via gtk+-3.0, but it is queried explicitly so the profile is honest about
+  -- what the renderer needs.
+  local cairo = {
+    flags = flag_list(pkg_config("cairo", "cflags")),
+    libraries = flag_list(pkg_config("cairo", "libs")),
+  }
   local gtk = {
     flags = flag_list(pkg_config("gtk+-3.0", "cflags")),
     libraries = flag_list(pkg_config("gtk+-3.0", "libs")),
@@ -298,7 +323,7 @@ local function build_c_tests()
 
   for _, suite in ipairs(read_test_manifest()) do
     if suite.name ~= "metrics" then
-      local profile = test_profile_flags(suite.profile, glib, gtk, stub_dir)
+      local profile = test_profile_flags(suite.profile, glib, gtk, cairo, stub_dir)
       build_c_executable("test_" .. suite.name, suite.sources, {
         output = root .. "/build/test_" .. suite.name,
         includes = profile.includes,

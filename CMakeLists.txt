@@ -29,6 +29,7 @@ add_executable(metrics_desktop
   src/pdf_toc.c
   src/pdf_session.c
   src/image_directory.c
+  src/outline_pdf.c
   src/smoke.c
   src/workspace_bindings.c
   src/text_transfer.c
@@ -47,11 +48,16 @@ add_executable(metrics_desktop
 include(CTest)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/tests/MANIFEST" manifest_lines)
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+# Cairo writes the combined-outline PDF. It is already present transitively via
+# gtk+-3.0, but it is named explicitly so the profile is honest about the need.
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 set(CMAKE_PROFILE_core "")
 set(CMAKE_PROFILE_glib "PkgConfig::GLIB")
 set(CMAKE_PROFILE_glib-math "PkgConfig::GLIB")
 set(CMAKE_PROFILE_gtk-stub "PkgConfig::GTK")
 set(CMAKE_PROFILE_pdftotext "PkgConfig::GLIB")
+# GTK because the suite links app_support.c for the shared chooser; m for lround.
+set(CMAKE_PROFILE_cairo "PkgConfig::CAIRO;PkgConfig::GTK;m")
 
 foreach (line IN LISTS manifest_lines)
   string(REGEX REPLACE "#.*" "" line "${line}")
@@ -87,7 +93,7 @@ foreach (line IN LISTS manifest_lines)
     if (profile STREQUAL "pdftotext")
       target_compile_definitions(${target} PRIVATE PDFTOTEXT_EXECUTABLE="pdftotext")
     endif()
-    if (profile STREQUAL "gtk-stub")
+    if (profile STREQUAL "gtk-stub" OR profile STREQUAL "cairo")
       target_include_directories(${target} PRIVATE tests/stubs)
     endif()
     # The suites write fixtures under build/<suite>-test, so they must run from
@@ -97,7 +103,7 @@ foreach (line IN LISTS manifest_lines)
 endforeach()
 
 target_include_directories(metrics_desktop PRIVATE include)
-target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK)
+target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK PkgConfig::CAIRO)
 set(FRONTEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend-vue")
 set(FRONTEND_HTML "${FRONTEND_DIR}/dist/index.html")
 set(FRONTEND_SOURCES
@@ -114,6 +120,8 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/src/editor-session.js"
   "${FRONTEND_DIR}/src/pdf-session.js"
   "${FRONTEND_DIR}/src/image-session.js"
+  "${FRONTEND_DIR}/src/map-explorer.js"
+  "${FRONTEND_DIR}/src/outline-pdf.js"
   "${FRONTEND_DIR}/src/toc-outline.js"
   "${FRONTEND_DIR}/public/index.html"
   "${FRONTEND_DIR}/rsbuild.config.js"
@@ -121,6 +129,8 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/tests/image-viewer.test.js"
   "${FRONTEND_DIR}/tests/static-shell.test.js"
   "${FRONTEND_DIR}/tests/workspace.test.js"
+  "${FRONTEND_DIR}/tests/map-explorer.test.js"
+  "${FRONTEND_DIR}/tests/outline-pdf.test.js"
   "${FRONTEND_DIR}/tests/template-bindings.test.js"
   "${FRONTEND_DIR}/tests/native-bridge.test.js"
   "${FRONTEND_DIR}/tests/workspace-report.test.js"

@@ -27,6 +27,12 @@ import {
   setImageCollection,
 } from '../src/image-session.js';
 import {
+  mapPin,
+  mapStatus,
+  mapStatusError,
+  mapZoom,
+} from '../src/map-explorer.js';
+import {
   pdfDocument,
   pdfName,
   pdfPageNumber,
@@ -41,6 +47,7 @@ import {
   activeTocItem,
   addTocItem,
   attachImageToToc,
+  attachLocationToToc,
   attachPdfPageToToc,
   cancelTocEdit,
   configureTocOutline,
@@ -62,6 +69,7 @@ import {
   moveTocItem,
   nextTocItem,
   openLinkedImages,
+  openLinkedLocation,
   openLinkedPdfPage,
   previousTocItem,
   removeTocItem,
@@ -609,6 +617,101 @@ test('jumping to a linked page explains a closed document', async () => {
   assert.equal(view.value, 'pdf');
   assert.equal(pdfStatusError.value, true);
   assert.equal(pdfStatus.value, 'Open the source document to jump to page 3.');
+});
+
+/* --- links to the map ------------------------------------------------------ */
+
+test('attaching a pin stores the coordinates on the selected section', () => {
+  const item = makeItem({ title: 'Site visit' });
+  resetOutline([item], item.id);
+  mapPin.value = { lat: 48.8584, lon: 2.2945, label: '' };
+
+  attachLocationToToc();
+
+  assert.deepEqual(item.links.location, {
+    lat: 48.8584,
+    lon: 2.2945,
+    label: '',
+  });
+  assert.equal(mapStatus.value, 'Location attached to “Site visit”.');
+  assert.equal(mapStatusError.value, false);
+  mapPin.value = null;
+});
+
+test('attaching a location needs both a target and a pin', () => {
+  const item = makeItem({ title: 'Site visit' });
+  resetOutline([item], item.id);
+  mapPin.value = null;
+
+  /* A pin, but no target. */
+  linkTargetId.value = null;
+  activeTocId.value = null;
+  mapPin.value = { lat: 1, lon: 2, label: '' };
+  attachLocationToToc();
+  assert.equal(mapStatusError.value, true);
+  assert.match(mapStatus.value, /Select an outline item/);
+  assert.equal(item.links.location, null);
+
+  /* A target, but no pin. */
+  linkTargetId.value = item.id;
+  mapPin.value = null;
+  attachLocationToToc();
+  assert.equal(mapStatusError.value, true);
+  assert.match(mapStatus.value, /drop a pin/);
+  assert.equal(item.links.location, null);
+});
+
+test('re-attaching replaces the previous place rather than adding one', () => {
+  const item = makeItem({ title: 'Site visit' });
+  item.links.location = { lat: 1, lon: 1, label: '' };
+  resetOutline([item], item.id);
+
+  mapPin.value = { lat: 10, lon: 20, label: '' };
+  attachLocationToToc();
+
+  assert.deepEqual(item.links.location, { lat: 10, lon: 20, label: '' });
+  mapPin.value = null;
+});
+
+test('a stored location is copied, not aliased, into the outline', () => {
+  const item = makeItem({ title: 'Site visit' });
+  resetOutline([item], item.id);
+  mapPin.value = { lat: 5, lon: 6, label: 'Fifth' };
+
+  attachLocationToToc();
+
+  /* Moving the pin afterwards must not rewrite what was attached. */
+  mapPin.value = { lat: 99, lon: 99, label: 'Moved' };
+  assert.equal(item.links.location.lat, 5);
+  assert.equal(item.links.location.label, 'Fifth');
+  mapPin.value = null;
+});
+
+test('jumping to a linked location centres the explorer on it', () => {
+  const item = makeItem({ title: 'Site visit' });
+  item.links.location = { lat: 48.8584, lon: 2.2945, label: 'Eiffel Tower' };
+  resetOutline([item], item.id);
+
+  openLinkedLocation(item);
+
+  assert.equal(view.value, 'map');
+  assert.deepEqual(mapPin.value, {
+    lat: 48.8584,
+    lon: 2.2945,
+    label: 'Eiffel Tower',
+  });
+  assert.ok(mapZoom.value >= 13, 'zoomed in to the saved place');
+  assert.match(mapStatus.value, /Eiffel Tower/);
+});
+
+test('a section with no location opens the explorer without a pin', () => {
+  const item = makeItem({ title: 'Empty' });
+  resetOutline([item], item.id);
+  mapPin.value = null;
+
+  openLinkedLocation(item);
+
+  assert.equal(mapPin.value, null);
 });
 
 /* --- file transfer (import/export) -------------------------------------- */

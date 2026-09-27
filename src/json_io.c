@@ -275,3 +275,384 @@ void json_free_values(char **values, size_t count) {
         values[index] = NULL;
     }
 }
+
+/* --- reading general JSON ------------------------------------------------- */
+
+/*
+ * A recursive-descent parser over the same string rules read_string() already
+ * enforces. Children are collected into a small growable buffer rather than
+ * counted first, because a general document's shape is not known in advance and
+ * the two-pass trick the array reader uses would need the whole grammar twice
+ * for a tree of unknown depth.
+ */
+
+typedef struct {
+    const char *cursor;
+    json_result status;
+    int depth;
+} json_parser;
+
+static json_value *parse_value(json_parser *parser);
+
+static json_value *new_value(json_value_type type) {
+    json_value *value = calloc(1, sizeof(*value));
+    if (value != NULL) value->type = type;
+    return value;
+}
+
+void json_value_free(json_value *value) {
+    if (value == NULL) return;
+    for (size_t index = 0; index < value->count; index++) {
+        if (value->members != NULL) {
+            g_free(value->members[index].name);
+            json_value_free(value->members[index].value);
+        } else {
+            json_value_free(value->items[index]);
+        }
+    }
+    g_free(value->members);
+    g_free(value->items);
+    g_free(value->text);
+    g_free(value);
+}
+
+/* --- literals ------------------------------------------------------------- */
+
+static json_value *parse_null(json_parser *parser) {
+    if (strncmp(parser->cursor, "null", 4) != 0) {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    parser->cursor += 4;
+    return new_value(JSON_VALUE_NULL);
+}
+
+static json_value *parse_true_or_false(json_parser *parser, int boolean) {
+    const char *word = boolean ? "true" : "false";
+    size_t length = boolean ? 4 : 5;
+    json_value *value = NULL;
+    if (strncmp(parser->cursor, word, length) != 0) {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    parser->cursor += length;
+    value = new_value(JSON_VALUE_BOOL);
+    if (value != NULL) value->boolean = boolean;
+    return value;
+}
+
+static json_value *parse_number(json_parser *parser) {
+    char *end = NULL;
+    double number;
+    json_value *value = NULL;
+
+    /* strtod does the grammar; it also accepts forms JSON forbids (inf, nan),
+       so the leading character is checked first and the span re-validated. */
+    if (*parser->cursor != '-' && (*parser->cursor < '0' || *parser->cursor > '9')) {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    number = strtod(parser->cursor, &end);
+    if (end == parser->cursor) {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    /* Reject a bare "1." or "1e": JSON requires a digit after each. */
+    if (end[-1] == '.' || end[-1] == 'e' || end[-1] == 'E') {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    parser->cursor = end;
+    value = new_value(JSON_VALUE_NUMBER);
+    if (value != NULL) value->number = number;
+    return value;
+}
+
+static json_value *parse_string(json_parser *parser) {
+    const char *start = parser->cursor;
+    size_t length = 0;
+    json_value *value = NULL;
+
+    if (*parser->cursor != '"') {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    /* Measure, allocate exactly, then decode: the same two-pass discipline as
+       json_read_string_array(), so a long draft cannot overflow a fixed buffer. */
+    if (read_string(&parser->cursor, NULL, &length) != JSON_OK) {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    value = new_value(JSON_VALUE_STRING);
+    if (value == NULL) {
+        parser->status = JSON_ERR_MEMORY;
+        return NULL;
+    }
+    value->text = malloc(length + 1);
+    if (value->text == NULL) {
+        json_value_free(value);
+        parser->status = JSON_ERR_MEMORY;
+        return NULL;
+    }
+    /* Second pass, from the opening quote, into the buffer just sized. */
+    {
+        const char *cursor = start;
+        if (read_string(&cursor, value->text, &length) != JSON_OK) {
+            json_value_free(value);
+            parser->status = JSON_ERR_MALFORMED;
+            return NULL;
+        }
+        value->text[length] = '\0';
+        parser->cursor = cursor;
+    }
+    return value;
+}
+
+/* --- containers ------------------------------------------------------------ */
+
+/* Grows *items to hold at least one more child, doubling to keep this amortized. */
+static int reserve_slot(json_value ***items, size_t *capacity) {
+    if (*capacity == 0) {
+        *items = calloc(8, sizeof(**items));
+        if (*items == NULL) return 0;
+        *capacity = 8;
+        return 1;
+    }
+    if (*capacity > (size_t)-1 / 2 || *capacity * 2 > ((size_t)-1) / sizeof(**items)) {
+        return 0;
+    }
+    {
+        json_value **grown = realloc(*items, *capacity * 2 * sizeof(**items));
+        if (grown == NULL) return 0;
+        *items = grown;
+        *capacity *= 2;
+        return 1;
+    }
+}
+
+static int reserve_member(json_member **members, size_t *capacity) {
+    if (*capacity == 0) {
+        *members = calloc(8, sizeof(**members));
+        if (*members == NULL) return 0;
+        *capacity = 8;
+        return 1;
+    }
+    if (*capacity > (size_t)-1 / 2 || *capacity * 2 > ((size_t)-1) / sizeof(**members)) {
+        return 0;
+    }
+    {
+        json_member *grown = realloc(*members, *capacity * 2 * sizeof(**members));
+        if (grown == NULL) return 0;
+        *members = grown;
+        *capacity *= 2;
+        return 1;
+    }
+}
+
+static json_value *parse_array(json_parser *parser) {
+    json_value *array = new_value(JSON_VALUE_ARRAY);
+    size_t capacity = 0;
+    if (array == NULL) {
+        parser->status = JSON_ERR_MEMORY;
+        return NULL;
+    }
+    parser->cursor++; /* past '[' */
+    skip_whitespace(&parser->cursor);
+    if (*parser->cursor == ']') {
+        parser->cursor++;
+        return array;
+    }
+    for (;;) {
+        json_value *child = parse_value(parser);
+        if (child == NULL) {
+            json_value_free(array);
+            return NULL;
+        }
+        if (!reserve_slot(&array->items, &capacity)) {
+            json_value_free(child);
+            json_value_free(array);
+            parser->status = JSON_ERR_MEMORY;
+            return NULL;
+        }
+        array->items[array->count++] = child;
+        skip_whitespace(&parser->cursor);
+        if (*parser->cursor == ',') {
+            parser->cursor++;
+            skip_whitespace(&parser->cursor);
+            continue;
+        }
+        if (*parser->cursor == ']') {
+            parser->cursor++;
+            return array;
+        }
+        json_value_free(array);
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+}
+
+static json_value *parse_object(json_parser *parser) {
+    json_value *object = new_value(JSON_VALUE_OBJECT);
+    size_t capacity = 0;
+    if (object == NULL) {
+        parser->status = JSON_ERR_MEMORY;
+        return NULL;
+    }
+    parser->cursor++; /* past '{' */
+    skip_whitespace(&parser->cursor);
+    if (*parser->cursor == '}') {
+        parser->cursor++;
+        return object;
+    }
+    for (;;) {
+        json_value *key = parse_string(parser);
+        json_value *child = NULL;
+        if (key == NULL) {
+            json_value_free(object);
+            return NULL;
+        }
+        skip_whitespace(&parser->cursor);
+        if (*parser->cursor != ':') {
+            json_value_free(key);
+            json_value_free(object);
+            parser->status = JSON_ERR_MALFORMED;
+            return NULL;
+        }
+        parser->cursor++;
+        child = parse_value(parser);
+        if (child == NULL) {
+            json_value_free(key);
+            json_value_free(object);
+            return NULL;
+        }
+        if (!reserve_member(&object->members, &capacity)) {
+            json_value_free(key);
+            json_value_free(child);
+            json_value_free(object);
+            parser->status = JSON_ERR_MEMORY;
+            return NULL;
+        }
+        /* parse_string owns the decoded key; the member takes it over. */
+        object->members[object->count].name = key->text;
+        key->text = NULL;
+        json_value_free(key);
+        object->members[object->count].value = child;
+        object->count++;
+        skip_whitespace(&parser->cursor);
+        if (*parser->cursor == ',') {
+            parser->cursor++;
+            skip_whitespace(&parser->cursor);
+            continue;
+        }
+        if (*parser->cursor == '}') {
+            parser->cursor++;
+            return object;
+        }
+        json_value_free(object);
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+}
+
+static json_value *parse_value(json_parser *parser) {
+    json_value *value = NULL;
+    char lead;
+
+    if (parser->depth >= JSON_MAX_DEPTH) {
+        /* A stack overflow is a crash the webview can trigger; refuse instead. */
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    skip_whitespace(&parser->cursor);
+    lead = *parser->cursor;
+    if (lead == '\0') {
+        parser->status = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    parser->depth++;
+    if (lead == '{') {
+        value = parse_object(parser);
+    } else if (lead == '[') {
+        value = parse_array(parser);
+    } else if (lead == '"') {
+        value = parse_string(parser);
+    } else if (lead == 't') {
+        value = parse_true_or_false(parser, 1);
+    } else if (lead == 'f') {
+        value = parse_true_or_false(parser, 0);
+    } else if (lead == 'n') {
+        value = parse_null(parser);
+    } else {
+        value = parse_number(parser);
+    }
+    parser->depth--;
+    return value;
+}
+
+json_value *json_parse(const char *text, json_result *result) {
+    json_parser parser;
+    json_value *root;
+
+    if (result != NULL) *result = JSON_OK;
+    if (text == NULL) {
+        if (result != NULL) *result = JSON_ERR_NULL;
+        return NULL;
+    }
+    parser.cursor = text;
+    parser.status = JSON_OK;
+    parser.depth = 0;
+
+    root = parse_value(&parser);
+    if (root == NULL) {
+        if (result != NULL) *result = parser.status == JSON_OK ? JSON_ERR_MALFORMED : parser.status;
+        return NULL;
+    }
+    /* Trailing content means a doubled or concatenated document: rejecting it is
+       the difference between reading a document and reading its first prefix. */
+    skip_whitespace(&parser.cursor);
+    if (*parser.cursor != '\0') {
+        json_value_free(root);
+        if (result != NULL) *result = JSON_ERR_MALFORMED;
+        return NULL;
+    }
+    return root;
+}
+
+/* --- accessors ------------------------------------------------------------- */
+
+const json_value *json_object_get(const json_value *object, const char *name) {
+    if (object == NULL || object->type != JSON_VALUE_OBJECT || name == NULL) return NULL;
+    for (size_t index = 0; index < object->count; index++) {
+        if (object->members[index].name != NULL &&
+            strcmp(object->members[index].name, name) == 0) {
+            return object->members[index].value;
+        }
+    }
+    return NULL;
+}
+
+const char *json_string(const json_value *value, const char *fallback) {
+    if (value == NULL || value->type != JSON_VALUE_STRING || value->text == NULL) return fallback;
+    return value->text;
+}
+
+double json_number(const json_value *value, double fallback) {
+    if (value == NULL || value->type != JSON_VALUE_NUMBER) return fallback;
+    return value->number;
+}
+
+int json_bool(const json_value *value, int fallback) {
+    if (value == NULL || value->type != JSON_VALUE_BOOL) return fallback;
+    return value->boolean;
+}
+
+size_t json_count(const json_value *value) {
+    if (value == NULL) return 0;
+    if (value->type != JSON_VALUE_ARRAY && value->type != JSON_VALUE_OBJECT) return 0;
+    return value->count;
+}
+
+const json_value *json_at(const json_value *array, size_t index) {
+    if (array == NULL || array->type != JSON_VALUE_ARRAY || index >= array->count) return NULL;
+    return array->items[index];
+}

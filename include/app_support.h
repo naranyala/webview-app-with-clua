@@ -26,6 +26,13 @@ typedef struct {
     char *pdf_path;
     char *pdf_id;
     char *pdf_fingerprint;
+    /*
+     * The single workspace directory the combined-outline PDF is written to,
+     * set by a real folder-chooser gesture. It lives here rather than in
+     * outline_pdf.c so the binding can insist the path came from the user
+     * rather than from whatever the webview asked for.
+     */
+    char *outline_dir;
     GThread *pdf_toc_thread;
     /* Exit code forced by the smoke verdict; 0 leaves main()'s own code alone. */
     int exit_code_override;

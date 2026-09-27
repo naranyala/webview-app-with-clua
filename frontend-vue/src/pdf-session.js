@@ -16,6 +16,7 @@ import { computed, nextTick, ref, shallowRef } from 'vue';
 import { restoredWorkspace } from './boot-state.js';
 import { withFileTransfer } from './file-io.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
+import { MAX_RECENT_PATHS } from './workspace.js';
 
 /*
  * The PDF Reader session. Every dependency that reaches outside the module is
@@ -42,6 +43,14 @@ export function createPdfSession({
   const pdfFileInput = ref(null);
   const currentPdfUrl = ref('');
   const pdfName = ref(boot.pdf.name || 'No document selected');
+  /*
+   * The absolute path of the open document and the remembered list beside it.
+   * The viewer never re-opens a document on its own: picking an entry from
+   * pdfRecentPaths is what calls openPdfAt, so the stored URL below is display
+   * and identity state only.
+   */
+  const pdfPath = ref(boot.pdf.path);
+  const pdfRecentPaths = ref([...(boot.pdf.recentPaths ?? [])]);
   const pdfSessionSize = ref(boot.pdf.size);
   const pdfSourceUrl = ref(boot.pdf.url);
   const pdfDocumentId = ref(boot.pdf.documentId);
@@ -60,8 +69,6 @@ export function createPdfSession({
   const pdfPageCanvases = new Map();
   /* Bumped to cancel an in-flight render pass (document switch or unmount). */
   let pdfRenderToken = 0;
-  /* Guards resumePdfSession against re-entry while a restore is running. */
-  let pdfResumePending = false;
 
   /* --- heading extraction panel -------------------------------------------- */
 
@@ -240,9 +247,11 @@ export function createPdfSession({
     url,
     documentId = '',
     sourceUrl = '',
+    path = '',
   ) {
     currentPdfUrl.value = url;
     pdfName.value = name;
+    pdfPath.value = path;
     pdfSessionSize.value = Math.max(0, Math.floor(Number(size) || 0));
     pdfDocumentId.value = String(documentId || '');
     pdfSourceUrl.value = String(sourceUrl).startsWith('file:')
@@ -297,6 +306,43 @@ export function createPdfSession({
   }
 
   /*
+   * Moves a path to the front of the remembered list, dropping any earlier entry
+   * for the same file and keeping the list at MAX_RECENT_PATHS. A path that
+   * arrives empty (the browser file-input fallback has no absolute path) is
+   * ignored, so the history only ever holds things a later open can re-open.
+   */
+  function rememberPdfPath(path) {
+    const remembered = String(path ?? '').trim();
+    if (!remembered) return;
+    pdfRecentPaths.value = [
+      remembered,
+      ...pdfRecentPaths.value.filter((entry) => entry !== remembered),
+    ].slice(0, MAX_RECENT_PATHS);
+  }
+
+  /*
+   * Applies one host answer that is already known to be a document payload, and
+   * records the path it names. Shared by the chooser and the path binding so
+   * both remember an entry identically.
+   */
+  async function openPdfResult(opened) {
+    const url = String(opened.dataUrl || opened.url || '');
+    if (!url) {
+      setPdfStatus('The selected PDF did not provide a readable source.', true);
+      return;
+    }
+    rememberPdfPath(opened.path);
+    await setPdfDocument(
+      String(opened.name || 'document.pdf'),
+      Number(opened.size || 0),
+      url,
+      String(opened.documentId || ''),
+      String(opened.url || ''),
+      String(opened.path || ''),
+    );
+  }
+
+  /*
    * Opens the system picker when the host provides it, otherwise falls back to
    * the hidden file input. Every failure path reports through the status line.
    */
@@ -316,64 +362,49 @@ export function createPdfSession({
       handle: null,
     });
     if (outcome.status !== 'done') return;
-    const opened = outcome.result;
-    const url = String(opened.dataUrl || opened.url || '');
-    if (!url) {
-      setPdfStatus('The selected PDF did not provide a readable source.', true);
-      return;
-    }
-    await setPdfDocument(
-      String(opened.name || 'document.pdf'),
-      Number(opened.size || 0),
-      url,
-      String(opened.documentId || ''),
-      String(opened.url || ''),
-    );
+    await openPdfResult(outcome.result);
   }
 
   /*
-   * Restores the stored session after a restart. Only file:// sources can be
-   * re-opened without user action; anything else asks for the file again while
-   * keeping the saved page number.
+   * Re-opens a remembered document without showing the chooser, which is what
+   * makes the history list usable on every launch: nothing is restored, the
+   * path is asked for explicitly. The host rejects a path that is not a readable
+   * PDF, and the list entry is dropped so a moved or deleted file stops
+   * offering itself.
    */
-  async function resumePdfSession() {
-    if (pdfDocument.value || pdfLoading.value || pdfResumePending) return;
-    const name = pdfName.value;
-    const savedPage = pdfPageNumber.value;
-    if (name === 'No document selected') return;
-    if (!pdfSourceUrl.value.startsWith('file:')) {
-      setPdfStatus(`Re-open ${name} to resume at page ${savedPage}.`);
+  async function openPdfAt(path) {
+    const target = String(path ?? '').trim();
+    if (!target) return;
+    const openAt = native('openPdfAt');
+    if (!openAt) {
+      setPdfStatus(
+        'Opening a remembered path is available in the desktop app.',
+      );
       return;
     }
-    pdfResumePending = true;
-    setPdfStatus(`Restoring ${name}…`);
-    try {
-      await setPdfDocument(
-        name,
-        pdfSessionSize.value,
-        pdfSourceUrl.value,
-        pdfDocumentId.value,
-        pdfSourceUrl.value,
-      );
-      if (
-        pdfDocument.value &&
-        savedPage > 1 &&
-        savedPage <= pdfPageCount.value
-      ) {
-        pdfPageNumber.value = savedPage;
-        await defer();
-        scrollToPdfPage(savedPage);
-        setPdfStatus(`${name} · page ${savedPage} of ${pdfPageCount.value}`);
-      } else if (!pdfDocument.value) {
-        pdfPageNumber.value = savedPage;
-        setPdfStatus(
-          `Could not re-open ${name} automatically. Use Browse files to pick it again.`,
-          true,
-        );
-      }
-    } finally {
-      pdfResumePending = false;
+    const outcome = await withFileTransfer(() => call(() => openAt(target)), {
+      report: setPdfStatus,
+      messages: {
+        pending: `Opening ${target}…`,
+        error: 'Could not open the remembered document.',
+      },
+      handle: null,
+    });
+    if (outcome.status === 'canceled') return;
+    if (outcome.status !== 'done') {
+      forgetPdfPath(target);
+      return;
     }
+    await openPdfResult(outcome.result);
+  }
+
+  /* Drops one remembered path, used when the host can no longer open it. */
+  function forgetPdfPath(path) {
+    const target = String(path ?? '').trim();
+    if (!target) return;
+    pdfRecentPaths.value = pdfRecentPaths.value.filter(
+      (entry) => entry !== target,
+    );
   }
 
   /*
@@ -396,8 +427,8 @@ export function createPdfSession({
         ? `${pdfName.value} · page ${pdfPageNumber.value} of ${pdfPageCount.value}`
         : pdfName.value;
     }
-    if (pdfName.value !== 'No document selected') {
-      return `Resume ${pdfName.value} · page ${pdfPageNumber.value}`;
+    if (pdfRecentPaths.value.length > 0) {
+      return `${pdfRecentPaths.value.length} remembered document${pdfRecentPaths.value.length === 1 ? '' : 's'}`;
     }
     return 'Open a PDF from your local system';
   });
@@ -412,6 +443,7 @@ export function createPdfSession({
     loadPdfToc,
     navigateToPage,
     openPdf,
+    openPdfAt,
     pdfBadge,
     pdfContentElement,
     pdfDocument,
@@ -422,6 +454,8 @@ export function createPdfSession({
     pdfPageCanvases,
     pdfPageCount,
     pdfPageNumber,
+    pdfPath,
+    pdfRecentPaths,
     pdfRenderError,
     pdfSessionSize,
     pdfSourceUrl,
@@ -429,7 +463,8 @@ export function createPdfSession({
     pdfStatusError,
     pdfZoom,
     renderAllPdfPages,
-    resumePdfSession,
+    rememberPdfPath,
+    forgetPdfPath,
     scrollToPdfPage,
     setPdfDocument,
     setPdfPageCanvas,
@@ -457,6 +492,7 @@ export const handlePdfScroll = session.handlePdfScroll;
 export const loadPdfToc = session.loadPdfToc;
 export const navigateToPage = session.navigateToPage;
 export const openPdf = session.openPdf;
+export const openPdfAt = session.openPdfAt;
 export const pdfBadge = session.pdfBadge;
 export const pdfContentElement = session.pdfContentElement;
 export const pdfDocument = session.pdfDocument;
@@ -467,6 +503,8 @@ export const pdfName = session.pdfName;
 export const pdfPageCanvases = session.pdfPageCanvases;
 export const pdfPageCount = session.pdfPageCount;
 export const pdfPageNumber = session.pdfPageNumber;
+export const pdfPath = session.pdfPath;
+export const pdfRecentPaths = session.pdfRecentPaths;
 export const pdfRenderError = session.pdfRenderError;
 export const pdfSessionSize = session.pdfSessionSize;
 export const pdfSourceUrl = session.pdfSourceUrl;
@@ -474,7 +512,8 @@ export const pdfStatus = session.pdfStatus;
 export const pdfStatusError = session.pdfStatusError;
 export const pdfZoom = session.pdfZoom;
 export const renderAllPdfPages = session.renderAllPdfPages;
-export const resumePdfSession = session.resumePdfSession;
+export const rememberPdfPath = session.rememberPdfPath;
+export const forgetPdfPath = session.forgetPdfPath;
 export const scrollToPdfPage = session.scrollToPdfPage;
 export const setPdfDocument = session.setPdfDocument;
 export const setPdfPageCanvas = session.setPdfPageCanvas;

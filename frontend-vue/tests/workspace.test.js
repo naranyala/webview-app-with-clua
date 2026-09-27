@@ -15,6 +15,7 @@ import {
   LEGACY_TOC_KEY,
   loadWorkspace,
   loadWorkspaceNative,
+  MAX_RECENT_PATHS,
   normalizeWorkspace,
   outlineSummary,
   saveWorkspace,
@@ -93,6 +94,91 @@ test('normalizeWorkspace rejects unknown views and clamps the session', () => {
   assert.equal(workspace.images.selectedGroup, 'All Images');
 });
 
+test('remembered paths are trimmed, de-duplicated, and capped in order', () => {
+  const workspace = normalizeWorkspace({
+    pdf: {
+      recentPaths: [
+        ' /docs/first.pdf ',
+        '/docs/first.pdf',
+        '',
+        '   ',
+        null,
+        7,
+        ...Array.from(
+          { length: MAX_RECENT_PATHS + 5 },
+          (_, index) => `/docs/gen-${index}.pdf`,
+        ),
+      ],
+    },
+  });
+
+  const paths = workspace.pdf.recentPaths;
+  assert.equal(paths[0], '/docs/first.pdf');
+  assert.equal(paths.filter((p) => p === '/docs/first.pdf').length, 1);
+  assert.equal(paths.length, MAX_RECENT_PATHS);
+  /* Newest first, and the surplus at the tail is what gets dropped. */
+  assert.equal(paths[1], '/docs/gen-0.pdf');
+  assert.equal(paths.includes(`/docs/gen-${MAX_RECENT_PATHS + 4}.pdf`), false);
+});
+
+test('a corrupt path list degrades to empty instead of losing the workspace', () => {
+  for (const value of [null, 'not-a-list', 42, { a: 1 }]) {
+    const workspace = normalizeWorkspace({
+      pdf: { recentPaths: value },
+      images: { recentPaths: value },
+    });
+    assert.deepEqual(workspace.pdf.recentPaths, []);
+    assert.deepEqual(workspace.images.recentPaths, []);
+  }
+});
+
+test('both viewers carry a current path beside their remembered list', () => {
+  const workspace = normalizeWorkspace({
+    pdf: { path: '/docs/report.pdf', recentPaths: ['/docs/report.pdf'] },
+    images: {
+      directoryPath: '/photos/trip',
+      recentPaths: ['/photos/trip'],
+    },
+  });
+
+  assert.equal(workspace.pdf.path, '/docs/report.pdf');
+  assert.equal(workspace.images.directoryPath, '/photos/trip');
+
+  /* Round-tripping keeps both, so a remembered entry survives a restart. */
+  const round = JSON.parse(serializeWorkspace(workspace));
+  assert.deepEqual(round.pdf.recentPaths, ['/docs/report.pdf']);
+  assert.deepEqual(round.images.recentPaths, ['/photos/trip']);
+});
+
+test('the combined-PDF workspace folder is stored, bounded, and optional', () => {
+  const withFolder = normalizeWorkspace({
+    pdf: { workspaceDirectory: '  /home/writer/outline  ' },
+  });
+  assert.equal(withFolder.pdf.workspaceDirectory, '/home/writer/outline');
+
+  const without = normalizeWorkspace({ view: 'toc' });
+  assert.equal(without.pdf.workspaceDirectory, '');
+
+  /* Bounded like every other path, so a pathological value cannot bloat the
+     stored workspace. */
+  const huge = normalizeWorkspace({
+    pdf: { workspaceDirectory: 'x'.repeat(9000) },
+  });
+  assert.equal(huge.pdf.workspaceDirectory.length, 4096);
+
+  /* It survives the round trip, so the toolbar can show it after a restart. */
+  const round = JSON.parse(serializeWorkspace(withFolder));
+  assert.equal(round.pdf.workspaceDirectory, '/home/writer/outline');
+});
+
+test('a workspace with no path fields still normalizes', () => {
+  const workspace = normalizeWorkspace({ view: 'pdf' });
+  assert.equal(workspace.pdf.path, '');
+  assert.deepEqual(workspace.pdf.recentPaths, []);
+  assert.equal(workspace.images.directoryPath, '');
+  assert.deepEqual(workspace.images.recentPaths, []);
+});
+
 test('legacy outline key is migrated when no workspace exists', () => {
   const legacy = JSON.stringify([
     { id: 'old-1', title: 'Chapter 1', level: 2, content: 'draft text' },
@@ -131,7 +217,12 @@ test('serializeWorkspace round-trips outline links and session state', () => {
         title: ' Methods',
         level: 9,
         content: 'body copy',
-        links: { pdfPage: 12, pdfName: 'paper.pdf', images: ['a.png', '', 3] },
+        links: {
+          pdfPage: 12,
+          pdfName: 'paper.pdf',
+          images: ['a.png', '', 3],
+          location: { lat: 51.5073514, lon: -0.1277584, label: '  London  ' },
+        },
         updatedAt: 1700000000000,
       },
     ],
@@ -146,10 +237,57 @@ test('serializeWorkspace round-trips outline links and session state', () => {
   assert.equal(restored.tocItems[0].level, 3);
   assert.equal(restored.tocItems[0].links.pdfPage, 12);
   assert.deepEqual(restored.tocItems[0].links.images, ['a.png']);
+  assert.deepEqual(restored.tocItems[0].links.location, {
+    lat: 51.507351,
+    lon: -0.127758,
+    label: 'London',
+  });
   assert.equal(restored.editor.content, 'untitled notes');
   assert.equal(restored.pdf.page, 12);
   assert.equal(restored.pdf.zoom, 1.4);
   assert.equal(restored.images.directoryName, 'figures');
+});
+
+test('a link with no location reads as null, and junk is dropped', () => {
+  assert.equal(
+    normalizeWorkspace({ tocItems: [{ title: 'A' }] }).tocItems[0].links
+      .location,
+    null,
+  );
+  for (const location of [
+    'somewhere',
+    { lat: 'north', lon: 0 },
+    { lat: 91, lon: 0 },
+    { lat: 0, lon: 181 },
+    { lat: Number.NaN, lon: 0 },
+    null,
+  ]) {
+    const item = createTocItem({ title: 'A', links: { location } });
+    assert.equal(
+      item.links.location,
+      null,
+      `rejected ${JSON.stringify(location)}`,
+    );
+  }
+});
+
+test('a stored location survives an export and import round trip', () => {
+  const original = createTocItem({
+    title: 'Site visit',
+    links: { location: { lat: 48.8584, lon: 2.2945, label: 'Eiffel Tower' } },
+  });
+  const envelope = JSON.stringify({
+    format: 'metrics-toc',
+    version: 1,
+    items: [
+      { title: original.title, level: original.level, links: original.links },
+    ],
+  });
+  assert.deepEqual(JSON.parse(envelope).items[0].links.location, {
+    lat: 48.8584,
+    lon: 2.2945,
+    label: 'Eiffel Tower',
+  });
 });
 
 test('saveWorkspace writes a workspace the loader accepts', () => {

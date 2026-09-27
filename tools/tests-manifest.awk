@@ -16,6 +16,7 @@ function profile_cflags(profile) {
   if (profile == "glib-math") return "$(GLIB_CFLAGS)"
   if (profile == "gtk-stub") return "$(GTK_CFLAGS) -Itests/stubs"
   if (profile == "pdftotext") return "$(GLIB_CFLAGS) -DPDFTOTEXT_EXECUTABLE='\"pdftotext\"'"
+  if (profile == "cairo") return "$(GTK_CFLAGS) $(CAIRO_CFLAGS) -Itests/stubs"
   printf "tests-manifest.awk: unknown profile '%s'\n", profile > "/dev/stderr"
   exit 1
 }
@@ -26,6 +27,10 @@ function profile_libs(profile) {
   if (profile == "glib-math") return "$(GLIB_LIBS) -lm"
   if (profile == "gtk-stub") return "$(GTK_LIBS)"
   if (profile == "pdftotext") return "$(GLIB_LIBS)"
+  # GTK because the suite links app_support.c for return_native_error and the
+  # shared chooser; cairo.pc declares no Requires, so glib is named explicitly
+  # or the link fails on cairo's own undefined symbols. lround is libm.
+  if (profile == "cairo") return "$(GTK_LIBS) $(CAIRO_LIBS) $(GLIB_LIBS) -lm"
   printf "tests-manifest.awk: unknown profile '%s'\n", profile > "/dev/stderr"
   exit 1
 }
