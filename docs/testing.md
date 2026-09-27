@@ -93,6 +93,14 @@ to get wrong: the scale's sign, and the fact that the translate must *not* be
 scaled), the prefetch ring, wheel intent, inertia, keyboard driving, the scale
 bar, and staying inside the world.
 
+Travelling is covered with a clock and a frame queue the test drives, so a 560ms
+journey is stepped through frame by frame rather than waited on: that the view
+interpolates rather than jumps, that the tile set is re-committed often enough
+that the drawn ground is never magnified more than the commit threshold, that
+the outgoing layer is held until every incoming tile has arrived, that a grab or
+a key cancels the journey without moving the pin, and that a reduced-motion
+preference arrives without animating.
+
 [`tests/map-canvas.test.js`](../tests/map-canvas.test.js) builds the canvas
 renderer directly, with a recording context and a stub `Image`, and covers the
 draw path, the transform reaching the context, frame coalescing, cache eviction,

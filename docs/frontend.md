@@ -278,6 +278,32 @@ Places appear in three places at once - as a row in the sidebar, as a labelled
 marker on the map, and as the thing the `Link` button attaches - and all three
 read the same collection.
 
+### Persisting them, and how that silently fails
+
+The list is part of the workspace document (`map.places`), so it is written by
+the same `saveWorkspace` path as everything else and needs no storage of its own.
+
+The part that is easy to get wrong is the *trigger*. The persistence engine has
+no way to know anything changed: `App.vue` drives it entirely from a
+`watch([...])` list. A ref that the snapshot reads but the watcher does not
+include is persisted in principle and written in practice never - the value is
+right in memory, the UI is right, and it is gone after a restart.
+
+The whole Explorer's state, saved places included, was missing from that list.
+The one visible symptom was a "Save pin" button that appeared to work, because
+`promptSavePlace` had a hand-written save call - while renaming, removing,
+clearing, and every view option silently did nothing. `workspaceDirectory`, the
+folder the combined-outline PDF is written to, had the same defect.
+
+`tests/workspace-persistence.test.js` now checks the two lists against each
+other: it derives the persisted refs from `snapshot()` and the watched refs from
+`App.vue`, and fails if anything in the first is missing from the second. It
+handles all three access shapes the snapshot uses (a plain ref, an optional ref,
+and a getter, which is how the place collection is passed because it is replaced
+wholesale rather than mutated in place) and states the one name that differs
+rather than guessing at it. That check found the second, identical bug
+immediately.
+
 ### Rendering options
 
 | Option | What it does |
@@ -324,6 +350,49 @@ re-fetching, and drops the ones that leave the buffered set to bound the memory.
 The two differ in one visible way: only the DOM path can cross-fade the outgoing
 tile set, because the outgoing set belongs to the *previous* tile zoom and would
 need the previous transform to be placed correctly.
+
+### Travelling between places
+
+Choosing a saved place - from the sidebar, a marker, or the outline's `LOC`
+badge - **flies** the map there over ~560ms rather than teleporting. A jump loses
+the sense of direction that makes a map usable as a mental model: you arrive
+somewhere and have no idea which way you came from or how far.
+
+* `interpolateView(from, to, t)` projects both positions at the *current*
+  interpolated zoom and lerps there, rather than lerping latitude and longitude.
+  A lat/lon lerp is not a straight line on screen, so a long flight bows away
+  from the line it appears to take and the map seems to drift. Projecting at the
+  current zoom also makes travel cover a constant number of pixels per second, so
+  the flight neither crawls zoomed out nor bolts zoomed in.
+* `easeInOutCubic` starts and ends gently. A linear ramp reads as a machine; an
+  ease-in-only reads as a stall followed by a lurch, which is worse when the
+  reader is trying to keep their bearings.
+* The **tile set is re-committed during the journey**, using the same threshold
+  a pinch uses. Committing only at the end would magnify the starting tiles by
+  the whole zoom difference - sixteen times for a jump from zoom 10 to 14. The
+  previous integer level stays underneath as a backdrop, so the ground under the
+  journey is never blank.
+* The outgoing layer stores the **tile zoom it was fetched at** and derives its
+  transform live from the current view. A captured transform freezes those tiles
+  where they were at the moment of the change, so they sit visibly misaligned -
+  and during a flight, which animates the view, for the whole journey.
+* The outgoing layer is retired only once **every** incoming tile has reported in.
+  Retiring it on the first arrival drops the ground the map is standing on while
+  most of the new tiles are still missing.
+* The **pin lands with the map**, and only if the journey was not interrupted, so
+  it cannot end up marking a place the reader never actually reached.
+* Any deliberate input - a grab, a wheel, an arrow key, a double click - cancels
+  the journey and the view stays where it is. A key the map does not use does
+  not, so typing does not cancel it.
+* `prefers-reduced-motion: reduce` skips the journey entirely and arrives
+  directly; for a reader who finds motion uncomfortable the journey is the
+  problem, not a nicety.
+
+A place already framed at the level it is looked at from starts no journey, but
+one that is on screen at the wrong scale is still zoomed in to - and that zoom is
+animated too, since a sudden jump from zoom 4 to 13 is disorienting in the other
+direction as well. A journey never zooms *out* to reach a nearby place: the
+target is the closer of the reader's current zoom and 13, never the further.
 
 ### Staying inside the world
 

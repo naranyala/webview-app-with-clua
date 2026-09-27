@@ -261,3 +261,44 @@ export function scaleBarFor(latitude, zoom, maxWidth = 120) {
         : `${Math.round(feet)} ft`,
   };
 }
+
+/* --- travel between two views ---------------------------------------------- */
+
+/*
+ * Eases a journey from 0 to 1.
+ *
+ * Cubic in-out, so a flight starts and ends gently instead of snapping away and
+ * arriving. A linear ramp reads as a machine; an ease-in-only reads as a stall
+ * followed by a lurch, which is worse for a map where the reader is trying to
+ * keep their bearings.
+ */
+export function easeInOutCubic(t) {
+  const progress = Math.min(1, Math.max(0, Number(t) || 0));
+  return progress < 0.5
+    ? 4 * progress * progress * progress
+    : 1 - (-2 * progress + 2) ** 3 / 2;
+}
+
+/*
+ * A view partway between two, at constant speed across the screen.
+ *
+ * The two positions are projected at the *current* interpolated zoom and
+ * lerped there, rather than lerping latitude and longitude directly. That
+ * difference is what a reader sees: a lat/lon lerp is not a straight line on
+ * screen, so a long flight bows away from the straight line it appears to take
+ * and the map seems to drift. Projecting at the current zoom also makes the
+ * travel cover a constant number of pixels per second at every stage, so the
+ * flight neither crawls when zoomed out nor bolts when zoomed in.
+ */
+export function interpolateView(from, to, t) {
+  const progress = Math.min(1, Math.max(0, Number(t) || 0));
+  const zoom = clampZoom(from.zoom + (to.zoom - from.zoom) * progress);
+  const start = projectToPixel(from.lon, from.lat, zoom);
+  const end = projectToPixel(to.lon, to.lat, zoom);
+  const point = unprojectFromPixel(
+    start.x + (end.x - start.x) * progress,
+    start.y + (end.y - start.y) * progress,
+    zoom,
+  );
+  return { lat: point.lat, lon: point.lon, zoom };
+}

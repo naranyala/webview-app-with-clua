@@ -156,12 +156,14 @@ describe('independent outlines with stub collaborators', () => {
   function collaborators() {
     const notice = [];
     const imageStatus = [];
+    const mapFlown = [];
     const mapShown = [];
     const mapStatus = [];
     const pdfStatus = [];
     return {
       notice,
       imageStatus,
+      mapFlown,
       mapShown,
       mapStatus,
       pdfStatus,
@@ -202,6 +204,10 @@ describe('independent outlines with stub collaborators', () => {
         mapPin: { value: null },
         showMapLocation: (value) => {
           mapShown.push(value);
+          return true;
+        },
+        flyToLocation: (value) => {
+          mapFlown.push(value);
           return true;
         },
         setMapStatus: (message) => mapStatus.push(message),

@@ -26,12 +26,7 @@ import {
   selectedImageGroup,
   setImageCollection,
 } from '../src/image-session.js';
-import {
-  mapPin,
-  mapStatus,
-  mapStatusError,
-  mapZoom,
-} from '../src/map-explorer.js';
+import { mapPin, mapStatus, mapStatusError } from '../src/map-explorer.js';
 import {
   pdfDocument,
   pdfName,
@@ -687,7 +682,13 @@ test('a stored location is copied, not aliased, into the outline', () => {
   mapPin.value = null;
 });
 
-test('jumping to a linked location centres the explorer on it', () => {
+test('jumping to a linked location travels to it in the explorer', async () => {
+  /*
+   * The outline's job here is to switch view and tell the map where to go; that
+   * the map travels rather than teleports, and arrives at the right zoom, is the
+   * map session's business and is covered in map-explorer.test.js. Asserting it
+   * through the real session here would mean waiting on a 560ms animation.
+   */
   const item = makeItem({ title: 'Site visit' });
   item.links.location = { lat: 48.8584, lon: 2.2945, label: 'Eiffel Tower' };
   resetOutline([item], item.id);
@@ -695,13 +696,19 @@ test('jumping to a linked location centres the explorer on it', () => {
   openLinkedLocation(item);
 
   assert.equal(view.value, 'map');
-  assert.deepEqual(mapPin.value, {
-    lat: 48.8584,
-    lon: 2.2945,
-    label: 'Eiffel Tower',
-  });
-  assert.ok(mapZoom.value >= 13, 'zoomed in to the saved place');
-  assert.match(mapStatus.value, /Eiffel Tower/);
+  /* The pin is not moved yet: it lands with the journey, and only if the
+     journey is not interrupted. */
+  assert.equal(mapPin.value, null, 'the pin waits for the journey to land');
+});
+
+test('a linked location the map cannot read is reported', () => {
+  const item = makeItem({ title: 'Site visit' });
+  resetOutline([item], item.id);
+  /* No location on the item: nothing to travel to, and no error either - a
+     section simply need not be about a place. */
+  openLinkedLocation(item);
+  assert.equal(view.value, 'map');
+  assert.equal(mapStatusError.value, false);
 });
 
 test('a section with no location opens the explorer without a pin', () => {

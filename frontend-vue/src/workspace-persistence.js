@@ -29,12 +29,29 @@ const SAVE_FAILURE_MESSAGE = 'The workspace could not be saved to this device.';
  * store:   workspace.js's persistence surface.
  * boot:    the boot snapshot from boot-state.js.
  */
+/*
+ * The debounce calls its timers as methods of this object, so `this` is the
+ * object rather than the window. WebKitGTK enforces the host's receiver check on
+ * Window methods and throws "Can only call Window.setTimeout on instances of
+ * Window" if the receiver is not a Window - which, in the desktop host, meant
+ * the debounced save never ran and only the unload flush ever reached disk.
+ * Node does not check the receiver, so a bare capture passes every test here and
+ * fails silently in the only environment that matters.
+ *
+ * Wrapping is the fix, and the reason it has to be a wrapper rather than a
+ * bound function is that tests replace the global after this module is loaded.
+ */
+const defaultTimers = {
+  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+  clearTimeout: (handle) => globalThis.clearTimeout(handle),
+};
+
 export function createWorkspacePersistence({
   sessions,
   store,
   boot,
   now = () => Date.now(),
-  timers = { setTimeout, clearTimeout },
+  timers = defaultTimers,
   debounceMs = SAVE_DEBOUNCE_MS,
   onPersistenceFailure = null,
   report = formatWorkspaceReport,

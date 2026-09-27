@@ -82,7 +82,7 @@ export function createTocOutline({
     openLightbox,
     setImageStatus,
   } = images;
-  const { mapPin, showMapLocation, setMapStatus } = map;
+  const { mapPin, showMapLocation, flyToLocation, setMapStatus } = map;
   const { read: readTransfer, write: writeTransfer } = transfer;
 
   /* --- outline state -------------------------------------------------------- */
@@ -766,7 +766,9 @@ export function createTocOutline({
     const location = item?.links?.location;
     if (!location) return;
     selectView('map');
-    if (!showMapLocation(location)) {
+    /* Travelled, not teleported: the reader followed a link and should see
+       where it took them. */
+    if (!flyToLocation(location)) {
       setMapStatus('The saved location could not be read.', true);
     }
   }

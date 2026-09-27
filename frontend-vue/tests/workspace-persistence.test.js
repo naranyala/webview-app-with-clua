@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { ref } from 'vue';
 
@@ -431,5 +432,196 @@ describe('the header report', () => {
     assert.equal(engine.workspaceReport.value.scope, 'save');
     assert.equal(engine.workspaceReport.value.code, 'WRITE_FAILED');
     assert.match(engine.workspaceReport.value.text, /not saved/i);
+  });
+});
+
+/*
+ * A wiring check for the save trigger itself.
+ *
+ * The persistence engine has no way to know that something changed: App.vue
+ * drives it entirely from a `watch([...])` list. A ref that is read by
+ * snapshot() but missing from that list is silently never written - the app looks
+ * correct, the value is right in memory, and it is gone after a restart.
+ *
+ * That is not hypothetical: the whole Explorer's state, including the saved
+ * places, was missing from the list. Adding a field to snapshot() and forgetting
+ * the watcher is an easy mistake to repeat, so the two are checked against each
+ * other here rather than left to review.
+ */
+describe('the save trigger covers everything that is persisted', () => {
+  const engine = readFileSync(
+    new URL('../src/workspace-persistence.js', import.meta.url),
+    'utf8',
+  );
+  const app = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
+
+  /* Only what snapshot() reads; apply() and the helpers write state instead.
+     Three shapes appear, and all three are persisted state: a plain ref, an
+     optional ref, and - for the place collection - a function returning the
+     array, because it is replaced wholesale rather than mutated in place. */
+  const snapshotBody = engine.slice(
+    engine.indexOf('function snapshot()'),
+    engine.indexOf('/*\n   * Restores a snapshot'),
+  );
+  const persisted = new Set([
+    /* sessions.name.value and sessions.name?.value */
+    ...[...snapshotBody.matchAll(/sessions\.(\w+)\??\.value/g)].map(
+      (m) => m[1],
+    ),
+    /* sessions.name() - a getter, not a ref */
+    ...[...snapshotBody.matchAll(/sessions\.(\w+)\(\s*\)/g)].map((m) => m[1]),
+  ]);
+
+  /*
+   * One persisted name is not the ref it reads: the place collection is passed
+   * in as a getter, because the list is replaced wholesale rather than mutated in
+   * place, so the sessions key and the watched ref differ. Stated here rather
+   * than guessed at by the checker.
+   */
+  const GETTER_ALIASES = { mapPlaces: 'places' };
+
+  const watchBody = app.slice(
+    app.indexOf('watch(\n  ['),
+    app.indexOf('  scheduleWorkspaceSave,'),
+  );
+  const watched = new Set(
+    [...watchBody.matchAll(/^\s{4}(\w+),$/gm)].map((m) => m[1]),
+  );
+
+  test('the snapshot and the watcher both name real state', () => {
+    /* Guards against a regex that silently matched nothing, which would make
+       every other case in this block pass for the wrong reason. */
+    assert.ok(persisted.size >= 22, `found ${persisted.size} persisted refs`);
+    assert.ok(watched.size >= 20, `found ${watched.size} watched refs`);
+  });
+
+  test('every persisted ref is watched, so a change actually triggers a save', () => {
+    const unwatched = [...persisted].filter((name) => {
+      const ref = GETTER_ALIASES[name] ?? name;
+      return !watched.has(ref);
+    });
+    assert.deepEqual(
+      unwatched,
+      [],
+      `persisted but never watched, so never written: ${unwatched.join(', ')}`,
+    );
+  });
+
+  test('the Explorer state is persisted and watched', () => {
+    /* Named explicitly because this is the set that was missed: the whole
+       Explorer's state, saved places included, was persisted and never
+       triggered a save. */
+    for (const name of [
+      'mapPlaces',
+      'mapSidebarOpen',
+      'mapFilter',
+      'mapRenderer',
+      'mapShowGrid',
+      'mapShowCursor',
+    ]) {
+      assert.ok(persisted.has(name), `${name} is not in the snapshot`);
+      assert.ok(
+        watched.has(GETTER_ALIASES[name] ?? name),
+        `${name} is not watched`,
+      );
+    }
+  });
+});
+
+/*
+ * The debounced save never ran in the desktop app.
+ *
+ * The engine's default timers were a bare `{ setTimeout, clearTimeout }` pair,
+ * and the debounce calls them as methods, so the receiver was the plain timers
+ * object. WebKitGTK enforces the host's receiver check on Window methods, so
+ * every scheduled save threw "Can only call Window.setTimeout on instances of
+ * Window" and no timer was ever armed. Only the unload flush reached disk, and
+ * only because it skips clearTimeout when no timer is pending.
+ *
+ * Node does not check the receiver, so the bug survived a full test suite and
+ * two simulations. These tests install a strict global timer - one that
+ * reproduces the host's receiver check - so the failure is reproducible here
+ * rather than only on a user's machine.
+ */
+function strictGlobalTimers() {
+  const scheduled = [];
+  const original = {
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+  };
+  const requireWindow = (name) =>
+    function (fn, ms) {
+      if (this !== globalThis) {
+        throw new TypeError(
+          `Can only call Window.${name} on instances of Window`,
+        );
+      }
+      return original.setTimeout(fn, ms);
+    };
+  const strictClear = function (handle) {
+    if (this !== globalThis) {
+      throw new TypeError(
+        'Can only call Window.clearTimeout on instances of Window',
+      );
+    }
+    return original.clearTimeout(handle);
+  };
+  globalThis.setTimeout = requireWindow('setTimeout');
+  globalThis.clearTimeout = strictClear;
+  return {
+    original,
+    restore() {
+      globalThis.setTimeout = original.setTimeout;
+      globalThis.clearTimeout = original.clearTimeout;
+    },
+  };
+}
+
+describe('the default debounce timers survive a host that checks the receiver', () => {
+  test('a scheduled save actually runs when the global timer rejects a bad receiver', async () => {
+    const strict = strictGlobalTimers();
+    const store = fakeStore({ native: true });
+    const sessions = fakeSessions();
+    const engine = createWorkspacePersistence({
+      sessions,
+      store,
+      boot: null,
+      debounceMs: 5,
+    });
+    try {
+      /* The regression: this used to throw from the watcher, leaving the saved
+         state unpersisted with no error the user could act on. */
+      assert.doesNotThrow(() => engine.schedule());
+      /* Wait past the debounce on the real clock, which is still strict. */
+      await new Promise((resolve) => strict.original.setTimeout(resolve, 30));
+      const saved = store.calls.filter((call) => call.name === 'saveLocal');
+      assert.equal(
+        saved.length,
+        1,
+        'the debounced save never reached the store',
+      );
+      assert.deepEqual(saved[0].state.tocItems, [{ id: 'a', title: 'One' }]);
+      assert.equal(
+        store.calls.filter((call) => call.name === 'saveNative').length,
+        1,
+        'the debounced save never reached the native store',
+      );
+    } finally {
+      strict.restore();
+    }
+  });
+
+  test('the engine never captures the globals by reference', () => {
+    /* A direct assertion on the mechanism, so the wrapper cannot be replaced
+       by a bare capture even if the behavioural test above is weakened. */
+    const source = readFileSync(
+      new URL('../src/workspace-persistence.js', import.meta.url),
+      'utf8',
+    );
+    assert.doesNotMatch(
+      source,
+      /timers\s*=\s*\{\s*setTimeout\s*,/,
+      'the default timers must be wrappers, not the unbound globals',
+    );
   });
 });

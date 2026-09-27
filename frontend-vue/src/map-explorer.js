@@ -56,6 +56,8 @@ import {
 import {
   clampZoom,
   committedZoom,
+  easeInOutCubic,
+  interpolateView,
   layerTransform,
   MAX_ZOOM,
   minimumZoomFor,
@@ -111,9 +113,10 @@ export function createMapExplorer({
   initialZoom = 2,
   initialCenter = { lat: 20, lon: 0 },
   animate = (fn) =>
-    globalThis.requestAnimationFrame?.(fn) ?? setTimeout(fn, 16),
+    globalThis.requestAnimationFrame?.(fn) ?? globalThis.setTimeout(fn, 16),
   cancelFrame = (handle) =>
-    globalThis.cancelAnimationFrame?.(handle) ?? clearTimeout(handle),
+    globalThis.cancelAnimationFrame?.(handle) ??
+    globalThis.clearTimeout(handle),
   /* Injectable so the canvas renderer is testable outside a browser, which has
      no Image constructor. */
   createImage = () => new globalThis.Image(),
@@ -143,6 +146,8 @@ export function createMapExplorer({
   const mapStatus = ref('Click the map to drop a pin for a section.');
   const mapStatusError = ref(false);
   const mapPanning = ref(false);
+  /* True while the view is travelling to a saved place. */
+  const mapFlying = ref(false);
   /* View options, persisted by the workspace so the map looks the same next
      launch. Each is a small enum rather than a free string so a corrupt stored
      value cannot invent a filter class that does not exist. */
@@ -156,6 +161,7 @@ export function createMapExplorer({
 
   let dragStart = null;
   let observer = null;
+  let flight = null;
   let commitTimer = 0;
   let glideHandle = 0;
   /* Keys of tiles in the current set that have reported in. Reset whenever the
@@ -226,16 +232,35 @@ export function createMapExplorer({
   );
 
   /*
-   * The previous set *and the transform it was drawn with*, kept mounted for one
-   * generation so a zoom commit fades out over tiles that are already there
-   * instead of flashing the background.
+   * The outgoing tile set, kept mounted while the incoming one fetches so a zoom
+   * commit or a flight fades over ground that is already there instead of
+   * flashing the background.
    *
-   * The transform has to be captured with them. The old set's positions are
-   * world pixels at the *old* tile zoom, so drawing it under the new transform
-   * would place it at the wrong scale entirely - a visible flash of offset tiles,
-   * which is worse than showing the background for a moment.
+   * It stores the tile zoom it was fetched at, and its transform is derived
+   * live from the current view. A captured transform would freeze the outgoing
+   * tiles at the position they had when the commit happened, so they would sit
+   * visibly misaligned for as long as they were on screen - and during a flight,
+   * which animates the view, that would be the whole journey.
    */
   const previousLayer = ref(null);
+
+  /*
+   * The outgoing layer's transform, recomputed every frame from the live view.
+   * Same formula as the main layer, so the two layers line up exactly and the
+   * incoming tiles appear to develop out of the outgoing ones.
+   */
+  const previousTransform = computed(() => {
+    const layer = previousLayer.value;
+    if (!layer) return null;
+    return layerTransform({
+      centerLat: mapCenter.value.lat,
+      centerLon: mapCenter.value.lon,
+      zoom: mapZoom.value,
+      tileZoom: layer.tileZoom,
+      width: mapSize.value.width,
+      height: mapSize.value.height,
+    });
+  });
 
   /*
    * The pin's offset inside the viewport. Derived from the two projections
@@ -325,7 +350,14 @@ export function createMapExplorer({
     if (loadedKeys.has(key)) return;
     loadedKeys.add(key);
     loadedCount.value += 1;
-    if (previousLayer.value) previousLayer.value = null;
+    /*
+     * Retire the outgoing layer only once the incoming set is complete.
+     *
+     * Retiring it on the first load - which is what this used to do - drops the
+     * ground the map is standing on while most of the new tiles are still
+     * missing, so a flight arrived at a half-drawn map.
+     */
+    if (previousLayer.value && !mapLoading.value) previousLayer.value = null;
   }
 
   /* Forgets which tiles have reported in, for when the whole set is replaced. */
@@ -343,23 +375,20 @@ export function createMapExplorer({
    */
   function commitTileZoom() {
     if (commitTimer) {
-      clearTimeout(commitTimer);
+      globalThis.clearTimeout(commitTimer);
       commitTimer = 0;
     }
     const target = committedZoom(mapZoom.value);
     if (target !== tileZoom.value) {
-      previousLayer.value = {
-        tiles: mapTiles.value,
-        transform: mapTransform.value,
-      };
+      previousLayer.value = { tiles: mapTiles.value, tileZoom: tileZoom.value };
       tileZoom.value = target;
       resetLoadedTiles();
     }
   }
 
   function scheduleCommit() {
-    if (commitTimer) clearTimeout(commitTimer);
-    commitTimer = setTimeout(() => {
+    if (commitTimer) globalThis.clearTimeout(commitTimer);
+    commitTimer = globalThis.setTimeout(() => {
       commitTimer = 0;
       commitTileZoom();
     }, ZOOM_COMMIT_DELAY_MS);
@@ -587,6 +616,8 @@ export function createMapExplorer({
 
   function handleMapPointerDown(event) {
     if (event.button !== 0) return;
+    /* A grab is a request to stop moving the map for them. */
+    cancelFlight();
     stopGlide();
     dragStart = {
       pointerId: event.pointerId,
@@ -707,6 +738,7 @@ export function createMapExplorer({
   /* Double click zooms in about the click, the way a map is expected to. */
   function handleMapDoubleClick(event) {
     event.preventDefault?.();
+    cancelFlight();
     const element = mapElement.value;
     if (!element) return;
     const bounds = element.getBoundingClientRect?.();
@@ -724,6 +756,7 @@ export function createMapExplorer({
     event.preventDefault?.();
     const element = mapElement.value;
     if (!element) return;
+    cancelFlight();
 
     if (classifyWheel(event) === 'pan') {
       stopGlide();
@@ -756,6 +789,7 @@ export function createMapExplorer({
    */
   function handleMapKeydown(event) {
     const step = KEY_PAN_STEP_PX * (event.shiftKey ? KEY_LONG_STEP_FACTOR : 1);
+
     switch (event.key) {
       case 'ArrowLeft':
         panMapByPixels(step, 0);
@@ -781,6 +815,9 @@ export function createMapExplorer({
         return;
     }
     event.preventDefault?.();
+    /* Only a key the map actually used counts as taking over, so an unhandled
+       key does not silently cancel a journey. */
+    cancelFlight();
     reportViewCoordinates();
   }
 
@@ -841,16 +878,158 @@ export function createMapExplorer({
     observer = null;
     dragStart = null;
     stopGlide();
+    cancelFlight();
     canvasRenderer.dispose();
-    if (commitTimer) clearTimeout(commitTimer);
+    if (commitTimer) globalThis.clearTimeout(commitTimer);
     commitTimer = 0;
     theDoc()?.defaultView?.removeEventListener?.('resize', handleWindowResize);
   }
 
+  /* --- travel between places ------------------------------------------------ */
+
   /*
-   * Centres the map on a stored location and pins it. Returns false when the
-   * value is not a usable coordinate, so a caller can report the bad link
-   * instead of silently doing nothing.
+   * A reduced-motion preference means the journey itself is the problem, not a
+   * nicety, so the map arrives there directly.
+   */
+  const reduceMotion = () =>
+    theDoc()?.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)')
+      ?.matches === true;
+
+  /*
+   * Where a place should be looked at from: close enough to be useful, but never
+   * further out than the reader already was, and never below what the viewport
+   * can actually cover.
+   */
+  function targetViewFor(location) {
+    return {
+      lat: location.lat,
+      lon: location.lon,
+      /*
+       * Zoom *in* to 13 when the reader is further out than that, and never
+       * further out than they already were. min() here would do the opposite and
+       * pull a reader who is already at street level back to a continent.
+       */
+      zoom: Math.max(mapZoom.value, Math.min(13, MAX_ZOOM), minViewZoom.value),
+    };
+  }
+
+  /*
+   * Arriving at a place: the view is already there, so this only drops the pin,
+   * re-commits the tiles, and says where the map ended up. Kept separate from
+   * ending a journey so an immediate jump - nothing to animate, a reduced-motion
+   * preference, or a place already on screen - lands the same way a flight does.
+   */
+  function arriveAt(pin) {
+    mapPin.value = pin;
+    commitTileZoom();
+    setMapStatus(
+      pin.label
+        ? `${pin.label} \u00b7 ${formatCoordinates(pin)}`
+        : `Showing ${formatCoordinates(pin)}.`,
+    );
+  }
+
+  /* Ends a journey. Only a journey that actually arrived moves the pin. */
+  function finishFlight(landed) {
+    if (!flight) return;
+    cancelFrame(flight.handle);
+    const arrived = flight.pin;
+    flight = null;
+    mapFlying.value = false;
+    if (landed && arrived) arriveAt(arrived);
+  }
+
+  /*
+   * Stops a journey where it is. The pin does not move: the reader took over, so
+   * their intent is the last word, and a cancelled flight leaves the map where
+   * they were rather than arriving somewhere they did not choose. The outgoing
+   * tile layer stays until the current set has loaded, so even an interrupted
+   * flight is standing on real ground.
+   */
+  function cancelFlight() {
+    if (!flight) return;
+    finishFlight(false);
+  }
+
+  function stepFlight() {
+    if (!flight) return;
+    const progress = Math.min(
+      1,
+      Math.max(0, (now() - flight.started) / flight.duration),
+    );
+    const view = interpolateView(
+      flight.from,
+      flight.to,
+      easeInOutCubic(progress),
+    );
+    mapZoom.value = view.zoom;
+    mapCenter.value = { lat: view.lat, lon: view.lon };
+    clampCenterToWorld();
+    /*
+     * The same threshold a pinch uses. Committing here rather than once at the
+     * end is what keeps the ground under the journey sharp: without it the
+     * source tiles would be magnified by the whole zoom difference, which for a
+     * jump from zoom 10 to 14 is sixteen times. The previous integer level stays
+     * underneath as the backdrop, so the map is never blank mid-flight.
+     */
+    if (Math.abs(mapZoom.value - tileZoom.value) >= ZOOM_COMMIT_THRESHOLD) {
+      commitTileZoom();
+    }
+    if (progress >= 1) {
+      commitTileZoom();
+      finishFlight(true);
+      return;
+    }
+    flight.handle = animate(stepFlight);
+  }
+
+  /*
+   * Travels to a saved place instead of teleporting to it.
+   *
+   * Returns false only when the value is not a usable coordinate, so a caller can
+   * report a bad link instead of silently doing nothing.
+   */
+  function flyToLocation(value, { duration = 560 } = {}) {
+    const location = normalizeLocation(value);
+    if (!location) {
+      setMapStatus('That section has no saved location.', true);
+      return false;
+    }
+    stopGlide();
+    cancelFlight();
+
+    const from = {
+      lat: mapCenter.value.lat,
+      lon: mapCenter.value.lon,
+      zoom: mapZoom.value,
+    };
+    const to = targetViewFor(location);
+    const settled =
+      from.lat === to.lat && from.lon === to.lon && from.zoom === to.zoom;
+    if (settled || duration <= 0 || reduceMotion()) {
+      /* Still has to go there - arriving is not the same as being there. */
+      mapCenter.value = { lat: to.lat, lon: to.lon };
+      mapZoom.value = to.zoom;
+      clampCenterToWorld();
+      arriveAt(location);
+      return true;
+    }
+
+    mapFlying.value = true;
+    setMapStatus(
+      location.label
+        ? `Travelling to ${location.label}\u2026`
+        : 'Travelling\u2026',
+    );
+    flight = { from, to, pin: location, started: now(), duration, handle: 0 };
+    stepFlight();
+    return true;
+  }
+
+  /*
+   * Centres the map on a stored location and pins it. This is the immediate
+   * jump: flyToLocation() is what a reader-initiated move should use, and this
+   * is what the map does when there is nothing to animate or nothing to travel.
    */
   function showMapLocation(value) {
     const location = normalizeLocation(value);
@@ -893,6 +1072,7 @@ export function createMapExplorer({
     mapStatus,
     mapStatusError,
     mapPanning,
+    mapFlying,
     mapLoading,
     mapFilter,
     mapRenderer,
@@ -903,6 +1083,7 @@ export function createMapExplorer({
     mapCanvasContext,
     mapTiles,
     previousLayer,
+    previousTransform,
     mapTransform,
     mapScaleBar,
     mapZoomLabel,
@@ -928,6 +1109,8 @@ export function createMapExplorer({
     locationFromEvent,
     pickMapLocation,
     showMapLocation,
+    flyToLocation,
+    cancelFlight,
     measureMap,
     startMapObserver,
     disposeMapExplorer,
@@ -956,6 +1139,7 @@ export const mapPinOffset = session.mapPinOffset;
 export const mapStatus = session.mapStatus;
 export const mapStatusError = session.mapStatusError;
 export const mapPanning = session.mapPanning;
+export const mapFlying = session.mapFlying;
 export const mapLoading = session.mapLoading;
 export const mapFilter = session.mapFilter;
 export const mapRenderer = session.mapRenderer;
@@ -967,6 +1151,7 @@ export const mapCanvasContext = session.mapCanvasContext;
 export const mapFilters = session.mapFilters;
 export const mapTiles = session.mapTiles;
 export const previousLayer = session.previousLayer;
+export const previousTransform = session.previousTransform;
 export const mapTransform = session.mapTransform;
 export const mapScaleBar = session.mapScaleBar;
 export const mapZoomLabel = session.mapZoomLabel;
@@ -990,6 +1175,8 @@ export const zoomOut = session.zoomOut;
 export const locationFromEvent = session.locationFromEvent;
 export const pickMapLocation = session.pickMapLocation;
 export const showMapLocation = session.showMapLocation;
+export const flyToLocation = session.flyToLocation;
+export const cancelFlight = session.cancelFlight;
 export const measureMap = session.measureMap;
 export const startMapObserver = session.startMapObserver;
 export const disposeMapExplorer = session.disposeMapExplorer;

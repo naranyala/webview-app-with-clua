@@ -1678,6 +1678,13 @@ body [hidden] {
 .map-canvas.panning {
   cursor: grabbing;
 }
+/*
+ * While the map is travelling it is being driven, not dragged, so the grab
+ * cursor would be a lie - and a pointer down cancels the journey anyway.
+ */
+.map-canvas.flying {
+  cursor: progress;
+}
 .map-canvas:focus-visible {
   outline: 2px solid #8ab4f8;
   outline-offset: -2px;
@@ -1709,9 +1716,27 @@ body [hidden] {
  * the moment it takes to fetch. Without it every zoom step flashes the
  * background between the old scale and the new one.
  */
-.map-tile-previous {
-  opacity: 0.55;
-  filter: saturate(0.85);
+/*
+ * The outgoing tile set, underneath the incoming one. It is faded rather than
+ * hidden so a new set developing over it reads as sharpening rather than as a
+ * flash, and it is retired only once the incoming set is complete.
+ */
+.map-tile-layer-previous {
+  opacity: 0.6;
+  filter: saturate(0.9);
+  transition: opacity 220ms ease-out;
+  pointer-events: none;
+}
+
+/*
+ * A journey lasts under a second, and the map is still usable throughout, so no
+ * motion reduction is warranted here beyond honouring the OS preference in the
+ * session, which skips the journey entirely.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .map-tile-layer-previous {
+    transition: none;
+  }
 }
 .map-pin {
   position: absolute;

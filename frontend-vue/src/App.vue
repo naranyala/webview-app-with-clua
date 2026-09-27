@@ -56,6 +56,7 @@ import {
 } from './image-session.js';
 import {
   disposeMapExplorer,
+  flyToLocation,
   handleMapDoubleClick,
   handleMapKeydown,
   handleMapPointerCancel,
@@ -71,6 +72,7 @@ import {
   mapElement,
   mapFilter,
   mapFilters,
+  mapFlying,
   mapLoading,
   mapPanning,
   mapPin,
@@ -89,6 +91,7 @@ import {
   noteTileLoaded,
   placeMarkerOffset,
   previousLayer,
+  previousTransform,
   setMapFilter,
   setMapRenderer,
   setMapShowCursor,
@@ -395,6 +398,20 @@ watch(
     imageDirectoryPath,
     imageRecentPaths,
     selectedImageGroup,
+    /* The folder the combined-outline PDF is written to. */
+    workspaceDirectory,
+    /*
+     * The Explorer's state. Every one of these is persisted, and a ref that is
+     * not in this list never reaches disk: the persistence engine is driven
+     * entirely by this watcher, so a saved place would exist until the next
+     * save for some unrelated reason swept it up.
+     */
+    places,
+    mapSidebarOpen,
+    mapFilter,
+    mapRenderer,
+    mapShowGrid,
+    mapShowCursor,
   ],
   scheduleWorkspaceSave,
   { deep: true },
@@ -509,18 +526,24 @@ function promptSavePlace() {
     setPlaceStatus('Click the map to drop a pin first.', true);
     return;
   }
-  const place = addPlace({
+  /* No save call here on purpose: adding to `places` is watched, which covers
+     this and every other way the collection changes. Calling it by hand as well
+     would be a second source of truth for when a place is written. */
+  addPlace({
     lat: mapPin.value.lat,
     lon: mapPin.value.lon,
     label: mapPin.value.label || formatCoordinates(mapPin.value),
   });
-  if (place) scheduleWorkspaceSave();
 }
 
-/* Centres the map on a saved place and drops the pin there. */
+/*
+ * Travels to a saved place and drops the pin there on arrival. The journey is
+ * what tells the reader where they went; teleporting loses the sense of direction
+ * that makes a map usable as a mental model.
+ */
 function goToPlace(place) {
   if (!place) return;
-  showMapLocation(place);
+  flyToLocation(place);
 }
 
 /* Marker position, or hidden when the place is nowhere near the view. */
@@ -1155,7 +1178,7 @@ onBeforeUnmount(() => {
             v-if="previousLayer"
             class="map-tile-layer map-tile-layer-previous"
             aria-hidden="true"
-            :style="{ transform: previousLayer.transform.css }"
+            :style="{ transform: previousTransform.css }"
           >
             <img
               v-for="tile in previousLayer.tiles"
