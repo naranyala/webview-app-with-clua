@@ -24,6 +24,11 @@ FetchContent_MakeAvailable(webview)
 
 add_executable(metrics_desktop
   src/webview_app.c
+  src/app_support.c
+  src/pdf_toc.c
+  src/pdf_session.c
+  src/image_directory.c
+  src/workspace_bindings.c
   src/webview_bridge.c
   src/workspace_store.c
   src/metrics.c
@@ -41,6 +46,14 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/src/image-viewer.js"
   "${FRONTEND_DIR}/src/pdf-compat.js"
   "${FRONTEND_DIR}/src/workspace.js"
+  "${FRONTEND_DIR}/src/workspace-report.js"
+  "${FRONTEND_DIR}/src/native-bridge.js"
+  "${FRONTEND_DIR}/src/boot-state.js"
+  "${FRONTEND_DIR}/src/app-shell.js"
+  "${FRONTEND_DIR}/src/editor-session.js"
+  "${FRONTEND_DIR}/src/pdf-session.js"
+  "${FRONTEND_DIR}/src/image-session.js"
+  "${FRONTEND_DIR}/src/toc-outline.js"
   "${FRONTEND_DIR}/public/index.html"
   "${FRONTEND_DIR}/rsbuild.config.js"
   "${FRONTEND_DIR}/plugins/single-file-html.js"
@@ -48,6 +61,14 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/tests/image-viewer.test.js"
   "${FRONTEND_DIR}/tests/static-shell.test.js"
   "${FRONTEND_DIR}/tests/workspace.test.js"
+  "${FRONTEND_DIR}/tests/template-bindings.test.js"
+  "${FRONTEND_DIR}/tests/native-bridge.test.js"
+  "${FRONTEND_DIR}/tests/workspace-report.test.js"
+  "${FRONTEND_DIR}/tests/app-shell.test.js"
+  "${FRONTEND_DIR}/tests/editor-session.test.js"
+  "${FRONTEND_DIR}/tests/pdf-session.test.js"
+  "${FRONTEND_DIR}/tests/image-session.test.js"
+  "${FRONTEND_DIR}/tests/toc-outline.test.js"
   "${FRONTEND_DIR}/package.json"
   "${FRONTEND_DIR}/package-lock.json"
 )

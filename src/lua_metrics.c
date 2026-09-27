@@ -1,3 +1,12 @@
+/*
+ * Lua bindings for metrics_engine, exported as native.core.metrics.
+ *
+ * Each engine is a full userdata holding the metrics_engine pointer; __gc
+ * destroys it, so scripts cannot leak one. Every argument check turns a
+ * metrics_error into a luaL_error, which keeps the Lua API total: either the
+ * call returns the handle/table it was asked for, or it raises.
+ */
+
 #include "metrics.h"
 
 #include <lua.h>

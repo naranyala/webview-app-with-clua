@@ -1,31 +1,50 @@
+/*
+ * Static contract tests over the composition layer, the template, the
+ * stylesheet, the build config, and the native host.
+ *
+ * `component` aggregates App.vue with its session modules and `nativeHost`
+ * aggregates src/*.c with include/*.h, so an assertion keeps working when a
+ * concern moves to its own file.
+ */
+
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const component = readFileSync(
-  new URL('../src/App.vue', import.meta.url),
-  'utf8',
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const readAll = (directory, extension) =>
+  readdirSync(new URL(directory, import.meta.url))
+    .filter((name) => name.endsWith(extension))
+    .sort()
+    .map((name) => read(`${directory}/${name}`))
+    .join('\n');
+
+/*
+ * The Vue app is split across App.vue (composition + template) and its
+ * session modules, so contract assertions read the whole composition layer.
+ * The native host is split across src/*.c with prototypes in include/*.h.
+ */
+const shellModules = [
+  '../src/app-shell.js',
+  '../src/boot-state.js',
+  '../src/editor-session.js',
+  '../src/image-session.js',
+  '../src/native-bridge.js',
+  '../src/pdf-session.js',
+  '../src/toc-outline.js',
+  '../src/workspace-report.js',
+];
+const component = [read('../src/App.vue'), ...shellModules.map(read)].join(
+  '\n',
 );
-const template = readFileSync(
-  new URL('../public/index.html', import.meta.url),
-  'utf8',
-);
-const config = readFileSync(
-  new URL('../rsbuild.config.js', import.meta.url),
-  'utf8',
-);
-const store = readFileSync(
-  new URL('../src/workspace.js', import.meta.url),
-  'utf8',
-);
-const styles = readFileSync(
-  new URL('../src/index.css', import.meta.url),
-  'utf8',
-);
-const nativeHost = readFileSync(
-  new URL('../../src/webview_app.c', import.meta.url),
-  'utf8',
-);
+const template = read('../public/index.html');
+const config = read('../rsbuild.config.js');
+const store = read('../src/workspace.js');
+const styles = read('../src/index.css');
+const nativeHost = `${readAll('../../src', '.c')}\n${readAll(
+  '../../include',
+  '.h',
+)}`;
 
 const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -232,5 +251,209 @@ test('Rsbuild emits a self-contained all-in-one bundle', () => {
     "scriptLoading: 'blocking'",
   ]) {
     assert.match(config, new RegExp(text));
+  }
+});
+
+test('Long state text never escapes its menu, toolbar, or sidebar', () => {
+  for (const pattern of [
+    /\.app-card\s*\{[^}]*overflow:\s*hidden/,
+    /\.app-card-copy\s*\{[^}]*min-width:\s*0/,
+    /\.app-card-copy strong\s*\{[^}]*text-overflow:\s*ellipsis/,
+    /\.app-card-copy small\s*\{[^}]*-webkit-line-clamp:\s*2/,
+    /\.app-card-copy small\s*\{[^}]*overflow-wrap:\s*anywhere/,
+    /\.toolbar-button\s*\{[^}]*flex-shrink:\s*0/,
+    /\.pdf-actions\s*\{[^}]*min-width:\s*0/,
+    /\.image-actions\s*\{[^}]*min-width:\s*0/,
+    /\.toc-manager-actions\s*\{[^}]*min-width:\s*0/,
+    /\.pdf-status\s*,[\s\S]*?\.toc-manager-status\s*\{[^}]*text-overflow:\s*ellipsis/,
+    /\.image-group-button span\s*\{[^}]*text-overflow:\s*ellipsis/,
+    /\.image-group-button small\s*\{[^}]*flex-shrink:\s*0/,
+    /\.toc-item\s*\{[^}]*overflow-wrap:\s*anywhere/,
+    /#cursor-position\s*\{[^}]*flex-shrink:\s*0/,
+    /\.pdf-resume\s*\{[^}]*overflow-wrap:\s*anywhere/,
+  ]) {
+    assert.match(styles, pattern);
+  }
+  for (const text of [
+    ':title="editorBadge"',
+    ':title="pdfBadge"',
+    ':title="imagesBadge"',
+    ':title="outlineBadge"',
+    ':title="pdfStatus"',
+    ':title="imageStatus"',
+    ':title="tocStatus"',
+    ':title="group.name"',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('Returning to the PDF reader repaints canvases and keeps the page', () => {
+  assert.match(component, /watch\(\s*view,\s*async \(current, previous\)/);
+  for (const text of [
+    "current !== 'pdf'",
+    "previous === 'pdf'",
+    'await renderAllPdfPages();',
+    'scrollToPdfPage(pdfPageNumber.value)',
+    'pdfPageCanvases.delete(pageNumber)',
+    'canvas?.isConnected',
+    'if (element) pdfPageCanvases.set(pageNumber, element);',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('Each viewer exposes one picker sharing one native call path', () => {
+  assert.match(component, /v-show="pdfDocument"[^>]*id="open-pdf"/);
+  assert.match(
+    component,
+    /v-show="imageFiles\.length > 0"[^>]*id="open-image-directory"/,
+  );
+  assert.doesNotMatch(
+    component,
+    /getOpenPdf|getExtractPdfToc|getOpenImageDirectory/,
+  );
+  for (const text of [
+    'function getNativeBinding(',
+    'async function runNativeCall(',
+    "getNativeBinding('openPdf')",
+    "getNativeBinding('openImageDirectory')",
+    "getNativeBinding('extractPdfToc')",
+    'runNativeCall(openPdfFile)',
+    'runNativeCall(openDirectory)',
+    'runNativeCall(extractToc)',
+    'id="browse-pdf"',
+    'id="browse-image-directory"',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'char *run_path_chooser(',
+    'int dispatch_picker(',
+    'void return_native_error(',
+    'PICKER_OPEN_FILE',
+    'PICKER_SELECT_FOLDER',
+    '"openPdf"',
+    '"openImageDirectory"',
+  ]) {
+    assert.ok(nativeHost.includes(text), `missing ${text}`);
+  }
+  assert.doesNotMatch(
+    nativeHost,
+    /return_pdf_error|return_image_error|pdf_open_request|image_directory_request/,
+  );
+});
+
+test('Workspace persistence failures surface as a visible report', () => {
+  for (const text of [
+    'id="workspace-report"',
+    'id="dismiss-workspace-report"',
+    'class="workspace-report"',
+    'refreshWorkspaceReport',
+    'getWorkspaceReport',
+    'workspaceReport.value',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'export function getWorkspaceReport',
+    'function recordWorkspaceReport',
+    "code: 'INVALID_CONTENT'",
+    "code: 'WRITE_FAILED'",
+  ]) {
+    assert.ok(store.includes(text), `missing ${text}`);
+  }
+  assert.ok(nativeHost.includes('INVALID_CONTENT'), 'missing INVALID_CONTENT');
+  assert.match(styles, /\.workspace-report\s*\{/);
+});
+
+test('The composition layer flushes and cleans up on lifecycle boundaries', () => {
+  for (const text of [
+    "window.addEventListener('pagehide', flushWorkspace)",
+    "window.addEventListener('beforeunload', flushWorkspace)",
+    "document.addEventListener('visibilitychange', handleVisibilityChange)",
+    'onBeforeUnmount(() => {',
+    "window.removeEventListener('pagehide', flushWorkspace)",
+    "window.removeEventListener('beforeunload', flushWorkspace)",
+    "document.removeEventListener('visibilitychange', handleVisibilityChange)",
+    'flushWorkspace();',
+    'disposePdfSession();',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('Leaving the editor syncs the draft and the outline can force a save', () => {
+  for (const text of [
+    'onViewLeaveEditor(() => syncTocDraft());',
+    'configureTocOutline({ persistNow: () => persistWorkspace() });',
+    'onViewEnterPdf(() => {',
+    'scheduleWorkspaceSave',
+    'hydrateNativeWorkspace();',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('A dismissed report stays away until persistence fails again', () => {
+  for (const text of [
+    'refreshWorkspaceReport();',
+    'function refreshWorkspaceReport()',
+    'workspaceReport.value = formatWorkspaceReport(getWorkspaceReport())',
+    '@click="workspaceReport = null"',
+    'v-if="workspaceReport"',
+    'v-else',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'export function getWorkspaceReport',
+    'export function clearWorkspaceReport',
+    'function clearSaveReport()',
+    "workspaceReport.scope === 'save'",
+  ]) {
+    assert.ok(store.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'Workspace not saved: ',
+    'Saved workspace not restored: ',
+    'export function formatWorkspaceReport',
+  ]) {
+    assert.ok(
+      read('../src/workspace-report.js').includes(text),
+      `missing ${text}`,
+    );
+  }
+});
+
+test('Every source and test file opens with a documentation comment', () => {
+  const listFiles = (directory, extension) =>
+    readdirSync(new URL(directory, import.meta.url))
+      .filter((name) => name.endsWith(extension))
+      .sort()
+      .map((path) => [`${directory}/${path}`, read(`${directory}/${path}`)]);
+
+  const documented = [
+    ...shellModules.map((path) => [path, read(path)]),
+    ...listFiles('../src', '.js'),
+    ...listFiles('../tests', '.js'),
+    ...listFiles('../../src', '.c'),
+    ...listFiles('../../include', '.h'),
+    ...listFiles('../../tests', '.c'),
+    ...listFiles('../../tests', '.lua'),
+  ];
+
+  for (const [path, text] of documented) {
+    if (path.endsWith('.lua')) {
+      assert.match(text, /^--/, `${path} has no file header comment`);
+    } else if (path.endsWith('.js')) {
+      assert.match(text, /^\/\*/, `${path} has no file header comment`);
+    } else {
+      assert.match(
+        text.slice(0, 4000),
+        /\/\*/,
+        `${path} has no file header comment`,
+      );
+    }
   }
 });

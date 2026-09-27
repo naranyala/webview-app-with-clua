@@ -1,8 +1,16 @@
+/*
+ * Unit tests for workspace.js: schema normalization, storage round-trips,
+ * legacy migration, the native bridge calls, and the persistence report that
+ * drives the header pill.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  clearWorkspaceReport,
   countWords,
   createTocItem,
+  getWorkspaceReport,
   hasNativeWorkspaceStore,
   LEGACY_TOC_KEY,
   loadWorkspace,
@@ -285,4 +293,209 @@ test('saveWorkspace stamps savedAt and preserves a provided one', () => {
 
   saveWorkspace({ view: 'pdf', savedAt: 42 }, storage);
   assert.equal(JSON.parse(storage.getItem(WORKSPACE_KEY)).savedAt, 42);
+});
+
+test('a corrupt stored workspace records a load report', () => {
+  clearWorkspaceReport();
+  loadWorkspace(fakeStorage({ [WORKSPACE_KEY]: '{' }));
+  const report = getWorkspaceReport();
+  assert.equal(report.scope, 'load');
+  assert.equal(report.code, 'INVALID_CONTENT');
+  assert.match(report.message, /not valid JSON/);
+  clearWorkspaceReport();
+});
+
+test('loadWorkspaceNative reports the host failure instead of only logging it', async () => {
+  clearWorkspaceReport();
+  await withNativeBindings(
+    {
+      loadWorkspace: async () => {
+        throw {
+          error: {
+            code: 'INVALID_CONTENT',
+            message:
+              'The saved workspace file is damaged and cannot be restored.',
+          },
+        };
+      },
+      saveWorkspace: async () => ({ ok: true }),
+    },
+    async () => {
+      assert.equal(await loadWorkspaceNative(), null);
+      const report = getWorkspaceReport();
+      assert.equal(report.scope, 'load');
+      assert.equal(report.code, 'INVALID_CONTENT');
+      assert.match(report.message, /damaged/);
+    },
+  );
+
+  clearWorkspaceReport();
+  await withNativeBindings(
+    {
+      loadWorkspace: async () => ({ ok: true, workspace: '{ "savedAt": ' }),
+      saveWorkspace: async () => ({ ok: true }),
+    },
+    async () => {
+      assert.equal(await loadWorkspaceNative(), null);
+      assert.equal(getWorkspaceReport().code, 'INVALID_CONTENT');
+    },
+  );
+  clearWorkspaceReport();
+});
+
+test('an empty native store produces no report', async () => {
+  clearWorkspaceReport();
+  await withNativeBindings(
+    {
+      loadWorkspace: async () => ({ ok: true, workspace: null }),
+      saveWorkspace: async () => ({ ok: true }),
+    },
+    async () => {
+      assert.equal(await loadWorkspaceNative(), null);
+      assert.equal(getWorkspaceReport(), null);
+    },
+  );
+});
+
+test('a failed native save reports itself and a confirmed write clears it', async () => {
+  clearWorkspaceReport();
+  await withNativeBindings(
+    {
+      loadWorkspace: async () => ({ ok: true, workspace: null }),
+      saveWorkspace: async () => {
+        throw {
+          error: {
+            code: 'WRITE_FAILED',
+            message: 'the workspace file could not be written',
+          },
+        };
+      },
+    },
+    async () => {
+      assert.equal(await saveWorkspaceNative('{"savedAt":400}'), false);
+      const report = getWorkspaceReport();
+      assert.equal(report.scope, 'save');
+      assert.equal(report.code, 'WRITE_FAILED');
+    },
+  );
+
+  await withNativeBindings(
+    {
+      loadWorkspace: async () => ({ ok: true, workspace: null }),
+      saveWorkspace: async () => ({ ok: true }),
+    },
+    async () => {
+      assert.equal(await saveWorkspaceNative('{"savedAt":500}'), true);
+      assert.equal(getWorkspaceReport(), null);
+    },
+  );
+});
+
+test('a rejected local save records a write failure the UI can show', () => {
+  clearWorkspaceReport();
+  const storage = fakeStorage();
+  storage.setItem = () => {
+    throw new Error('disk unavailable');
+  };
+
+  assert.equal(saveWorkspace({ view: 'menu' }, storage), false);
+
+  const report = getWorkspaceReport();
+  assert.equal(report.scope, 'save');
+  assert.equal(report.code, 'WRITE_FAILED');
+  assert.match(report.message, /could not be saved/);
+  clearWorkspaceReport();
+});
+
+test('a full browser quota explains itself instead of failing silently', () => {
+  clearWorkspaceReport();
+  const quota = new Error('full');
+  quota.name = 'QuotaExceededError';
+  const storage = fakeStorage();
+  storage.setItem = () => {
+    throw quota;
+  };
+
+  assert.equal(saveWorkspace({ view: 'menu' }, storage), false);
+  assert.equal(
+    getWorkspaceReport().message,
+    'Browser workspace storage is full.',
+  );
+  clearWorkspaceReport();
+});
+
+test('storage without write access reports the reason', () => {
+  clearWorkspaceReport();
+  assert.equal(saveWorkspace({ view: 'menu' }, null), false);
+  const report = getWorkspaceReport();
+  assert.equal(report.scope, 'save');
+  assert.equal(report.code, 'WRITE_FAILED');
+  assert.match(report.message, /does not allow local workspace storage/);
+  clearWorkspaceReport();
+});
+
+test('a confirmed write clears a save problem but not a load one', () => {
+  clearWorkspaceReport();
+  const failing = fakeStorage();
+  failing.setItem = () => {
+    throw new Error('busy');
+  };
+  saveWorkspace({ view: 'menu' }, failing);
+  assert.equal(getWorkspaceReport().scope, 'save');
+
+  const storage = fakeStorage();
+  assert.equal(saveWorkspace({ view: 'pdf' }, storage), true);
+  assert.equal(getWorkspaceReport(), null);
+
+  loadWorkspace(fakeStorage({ [WORKSPACE_KEY]: '{' }));
+  assert.equal(getWorkspaceReport().scope, 'load');
+  assert.equal(saveWorkspace({ view: 'pdf' }, storage), true);
+  assert.equal(getWorkspaceReport().scope, 'load');
+  clearWorkspaceReport();
+});
+
+test('a non-array legacy outline key is ignored', () => {
+  clearWorkspaceReport();
+  const workspace = loadWorkspace(
+    fakeStorage({ [LEGACY_TOC_KEY]: '{"title":"not an array"}' }),
+  );
+  assert.deepEqual(workspace.tocItems, []);
+  assert.equal(workspace.view, 'menu');
+  assert.equal(getWorkspaceReport(), null);
+});
+
+test('normalizing a non-object workspace yields the defaults', () => {
+  for (const value of [null, 'text', 42, [], undefined]) {
+    const workspace = normalizeWorkspace(value);
+    assert.equal(workspace.view, 'menu');
+    assert.equal(workspace.pdf.page, 1);
+    assert.equal(workspace.tocItems.length, 0);
+  }
+});
+
+test('serializing drops unknown fields and re-applies the clamps', () => {
+  const parsed = JSON.parse(
+    serializeWorkspace({ view: 'pdf', bogus: true, pdf: { zoom: 99 } }),
+  );
+  assert.equal(parsed.bogus, undefined);
+  assert.equal(parsed.view, 'pdf');
+  assert.equal(parsed.pdf.zoom, 2.5);
+  assert.equal(parsed.version, 1);
+});
+
+test('the native store needs both bindings, not just one', async () => {
+  await withNativeBindings(
+    { loadWorkspace: async () => ({ ok: true, workspace: null }) },
+    async () => {
+      assert.equal(hasNativeWorkspaceStore(), false);
+      assert.equal(await saveWorkspaceNative('{}'), false);
+    },
+  );
+  await withNativeBindings(
+    { saveWorkspace: async () => ({ ok: true }) },
+    async () => {
+      assert.equal(hasNativeWorkspaceStore(), false);
+      assert.equal(await loadWorkspaceNative(), null);
+    },
+  );
 });

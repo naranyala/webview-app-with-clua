@@ -9,7 +9,15 @@ application built with Rsbuild. The former Octane implementation remains in
 ```text
 frontend-vue/
 ├── src/index.js                 Vue root mounting
-├── src/App.vue                  workspace, writing editor, PDF, TOC, bridge
+├── src/App.vue                  composition: wiring, watchers, persistence, template
+├── src/boot-state.js            one-time boot snapshot of the workspace
+├── src/native-bridge.js         getNativeBinding / runNativeCall
+├── src/workspace-report.js      persistence report -> header sentence
+├── src/editor-session.js        Text Editor buffer, caret, word count
+├── src/app-shell.js             active view and transition hooks
+├── src/pdf-session.js           PDF load, render, paging, resume, heading panel
+├── src/image-session.js         folder selection, grouping, lightbox
+├── src/toc-outline.js           outline items and cross-tool links
 ├── src/workspace.js             persistent workspace store and outline schema
 ├── src/index.css                workspace layout and visual styling
 ├── src/metrics-ui.js            reserved metrics parsing and bridge errors
@@ -18,6 +26,35 @@ frontend-vue/
 ├── plugins/single-file-html.js  removes non-HTML build artifacts
 └── tests/                       pure utility and static contract tests
 ```
+
+## Session modules
+
+`App.vue` is the composition layer: it imports the session modules, owns the
+watchers, the lifecycle hooks, and the persistence loop, and renders the
+template. Everything else lives in one module per concern:
+
+| Module | Owns |
+| --- | --- |
+| `boot-state.js` | the single synchronous `loadWorkspace()` read per launch |
+| `native-bridge.js` | resolving and running a host binding (`getNativeBinding`, `runNativeCall`) |
+| `workspace-report.js` | turning a `getWorkspaceReport()` record into the header sentence |
+| `editor-session.js` | `editorContent`, the caret readout, and the word counter |
+| `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
+| `pdf-session.js` | document loading, the canvas registry, paging, resume, and the heading panel |
+| `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
+| `toc-outline.js` | outline items, linking to pages and images, and draft sync |
+
+Dependencies point one way: the modules import `workspace.js` and
+`native-bridge.js`, and `App.vue` imports the modules. A module that needs
+persistence or a cross-tool action receives it as an injection
+(`configureTocOutline({ persistNow })`) or a registered hook, so no module has
+to import `App.vue` back.
+
+Biome does not model Vue template scope, so `noUnusedImports` is disabled for
+`*.vue` files in `biome.json` (the same reason `noUnusedVariables` is off).
+`tests/template-bindings.test.js` covers the other direction: it compiles the
+template with Vue's own compiler and asserts that every `_ctx.name` reference
+resolves to a script-setup binding.
 
 ## Build behavior
 
@@ -38,9 +75,12 @@ resulting `frontend-vue/dist/index.html`.
 
 ## UI behavior
 
-`App.vue` uses Vue refs and computed state for the welcome menu, writing
-editor, TOC Manager, PDF Reader, PDF metadata, and extracted table of contents.
-Selecting a card changes the active view without navigating the WebView.
+`App.vue` composes the session modules into the welcome menu, writing editor,
+TOC Manager, PDF Reader, PDF metadata, and extracted table of contents. The
+module owns the cross-tool labels (`documentTitle`, `documentStatus`, the four
+menu badges) because each one spans two sessions; every watcher that reacts to
+a change also lives here. Selecting a card changes the active view without
+navigating the WebView.
 
 The Text Editor is a plain writing surface:
 
@@ -52,6 +92,15 @@ The Text Editor is a plain writing surface:
    outline with `Outline`.
 6. Runs no metrics: `Run metrics`, the result panel, history, export, the tool
    rail, and `Ctrl+Enter` were removed.
+
+Both file-facing cards expose exactly one picker control: the toolbar button
+appears once content exists, the empty state offers the same action as its
+primary call to action, and only one of the two is ever visible. Every call
+goes through the same helpers — `getNativeBinding(name)` resolves
+`window.<binding>` or the `window.__webview__.call` fallback, and
+`runNativeCall()` turns results and thrown errors into one `{ error | value }`
+shape shared by `openPdf`, `openImageDirectory`, and `extractPdfToc`. Without a
+native binding each card falls back to its own hidden `input[type="file"]`.
 
 The PDF reader:
 
@@ -83,9 +132,13 @@ writing flow:
 The four cards read and write one persisted record instead of isolated state:
 
 1. `src/workspace.js` defines the schema, normalizes every field on read and
-   write, migrates the legacy outline key, debounces saves, and reports
-   storage failures instead of throwing. Each save stamps `savedAt` so the
-   newer copy wins.
+   write, migrates the legacy outline key, debounces saves, and records every
+   storage failure as a report (`getWorkspaceReport()`: scope, code, message)
+   instead of only logging it. Each save stamps `savedAt` so the newer copy
+   wins. `App.vue` renders the latest report as a dismissible
+   `#workspace-report` pill in the launcher header, so a corrupt stored copy,
+   a rejected native read, or a failed write is visible in every view rather
+   than hidden in the console.
 2. `App.vue` seeds its refs from the synchronous `loadWorkspace()` cache and
    funnels every change (view, outline, bound item, editor buffer, PDF
    session, image folder) through a single `workspaceState()` snapshot saved
@@ -115,8 +168,9 @@ The four cards read and write one persisted record instead of isolated state:
 The frontend checks these native bindings in order:
 
 1. `window.openPdf` for system PDF selection.
-2. `window.extractPdfToc` for headings and cached TOC data.
-3. `window.__webview__.call` as a compatibility fallback.
+2. `window.openImageDirectory` for system directory selection.
+3. `window.extractPdfToc` for headings and cached TOC data.
+4. `window.__webview__.call` as a compatibility fallback.
 
 The native `summarize` binding is still registered by the C host and covered by
 `make bridge-test`, but the current UI no longer calls it. `src/metrics-ui.js`
@@ -126,7 +180,8 @@ is kept with its tests so the metrics input path can be reintroduced later.
 
 When changing UI behavior or bridge contracts:
 
-1. Update `App.vue` and `index.css`.
+1. Update the owning session module, `App.vue` when the wiring changes, and
+   `index.css`.
 2. Update `metrics-ui.js` if the reserved metrics helpers change, or
    `workspace.js` if the persisted schema changes.
 3. Update [the bridge protocol](bridge-protocol.md) when native contracts change.

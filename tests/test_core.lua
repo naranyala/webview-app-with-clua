@@ -1,3 +1,7 @@
+-- Binding test for the Lua metrics module (native.core), driven by lua-test
+-- in the Makefile. It mirrors the C unit tests: creation, rejected input, and
+-- the summary snapshot handed back across the Lua boundary.
+
 local metrics = require("native.core")
 local engine = metrics.from({ 1, 3, 5 })
 local summary = engine:summary()

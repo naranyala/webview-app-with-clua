@@ -1,6 +1,16 @@
 #ifndef WORKSPACE_STORE_H
 #define WORKSPACE_STORE_H
 
+
+/*
+ * Durable workspace store (layer 1: pure computation, file I/O only).
+ *
+ * load/save keep workspace.json inside WORKSPACE_STORE_MAX_BYTES with an
+ * atomic temp-file replace and report a workspace_store_result instead of
+ * errno. decode_argument validates and unescapes the saveWorkspace argument,
+ * which is how bindings get a safe payload without a JSON library.
+ */
+
 #include <stddef.h>
 
 /* Upper bound for a stored workspace payload (serialized JSON). */

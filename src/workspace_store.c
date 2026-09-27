@@ -1,3 +1,16 @@
+/*
+ * Durable JSON workspace store.
+ *
+ * workspace_store_load/save keep $XDG_DATA_HOME/native-workspace/workspace.json
+ * inside WORKSPACE_STORE_MAX_BYTES by writing a temporary file and renaming it
+ * over the target, and report a workspace_store_result instead of reading
+ * errno, so the webview bindings can map failures onto protocol codes.
+ *
+ * The second half is a small JSON scanner (is_object, decode_argument) used to
+ * validate the saveWorkspace argument and unescape its string payload without
+ * linking a JSON library.
+ */
+
 #include "workspace_store.h"
 
 #include <ctype.h>
@@ -31,6 +44,7 @@ static void store_result_set(workspace_store_result *target,
     if (target != NULL) *target = value;
 }
 
+/* Reads the whole file into a caller-owned buffer, or reports why it could not. */
 char *workspace_store_load(const char *path, size_t *length_out,
                            workspace_store_result *result) {
     workspace_store_result status = WORKSPACE_STORE_OK;
@@ -107,6 +121,7 @@ done:
     return buffer;
 }
 
+/* Writes to <path>.tmp and renames it over <path>, so a crash never truncates the store. */
 workspace_store_result workspace_store_save(const char *path, const char *data,
                                             size_t length) {
     char *temporary = NULL;
@@ -277,6 +292,11 @@ static int decode_string(const char **cursor_ref, char *output,
     return 1;
 }
 
+/*
+ * Validates the {"path":...,"data":...} shape structurally and returns the
+ * unescaped data string, or NULL with *error_set holding the protocol code
+ * the binding should report.
+ */
 char *workspace_store_decode_argument(const char *request,
                                       workspace_store_result *result) {
     workspace_store_result status = WORKSPACE_STORE_OK;

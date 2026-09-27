@@ -1,3 +1,9 @@
+/*
+ * Unit tests for the metrics engine: accumulation, min/max/mean/variance
+ * accuracy, reset, and every metrics_error path (NULL engine, non-finite
+ * value, overflow).
+ */
+
 #include "metrics.h"
 
 #include <assert.h>
@@ -127,6 +133,30 @@ int main(void) {
     assert(metrics_get_summary(engine, &result) == METRICS_OK);
     assert(result.count == 1);
     assert_close(result.mean, 42.0, 1e-12);
+
+    /* A rejected value never disturbs the aggregate it was refused into. */
+    metrics_reset(engine);
+    assert(metrics_add(engine, 3.0) == METRICS_OK);
+    assert(metrics_add(engine, 7.0) == METRICS_OK);
+    assert(metrics_add(engine, NAN) == METRICS_ERR_NON_FINITE);
+    assert(metrics_add(engine, INFINITY) == METRICS_ERR_NON_FINITE);
+    assert(metrics_get_summary(engine, &result) == METRICS_OK);
+    assert(result.count == 2);
+    assert_close(result.sum, 10.0, 1e-12);
+    assert_close(result.mean, 5.0, 1e-12);
+
+    /* Reference values: {1, 2, 3, 4} has mean 2.5 and population variance 1.25. */
+    metrics_reset(engine);
+    for (int i = 1; i <= 4; i++) {
+        assert(metrics_add(engine, (double)i) == METRICS_OK);
+    }
+    assert(metrics_get_summary(engine, &result) == METRICS_OK);
+    assert(result.count == 4);
+    assert_close(result.sum, 10.0, 1e-12);
+    assert_close(result.mean, 2.5, 1e-12);
+    assert_close(result.variance, 1.25, 1e-12);
+    assert_close(result.min, 1.0, 1e-12);
+    assert_close(result.max, 4.0, 1e-12);
 
     metrics_destroy(engine);
     return 0;

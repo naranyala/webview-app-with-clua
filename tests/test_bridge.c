@@ -1,3 +1,9 @@
+/*
+ * Unit tests for summarize_request(): the [[number, ...]] happy path, each
+ * malformed-request branch, and the shape of the {"error":...} replies the
+ * frontend relies on.
+ */
+
 #include "webview_bridge.h"
 
 #include <assert.h>
@@ -65,6 +71,38 @@ int main(void) {
     assert_contains(response, "\"count\":3");
     assert_contains(response, "\"min\":-3");
     assert_contains(response, "\"max\":-1");
+
+    /* A whitespace-only inner array is still empty input. */
+    err = summarize_request("[ [ ] ]", response, sizeof(response));
+    assert(err == BRIDGE_ERR_EMPTY_INPUT);
+    assert_contains(response, "\"code\":\"EMPTY_INPUT\"");
+
+    /* The success reply is one JSON object carrying every summary field. */
+    err = summarize_request("[[1]]", response, sizeof(response));
+    assert(err == BRIDGE_OK);
+    assert(response[0] == '{');
+    assert(response[strlen(response) - 1] == '}');
+    {
+        const char *fields[] = {
+            "\"count\":", "\"sum\":", "\"min\":", "\"max\":", "\"mean\":", "\"variance\":",
+        };
+        for (size_t index = 0; index < sizeof(fields) / sizeof(fields[0]); index++) {
+            assert_contains(response, fields[index]);
+        }
+    }
+
+    /* The reply needs room for its terminator: exact fit passes, one short fails. */
+    {
+        size_t needed = strlen(response);
+        char exact_response[512];
+        assert(needed + 1 <= sizeof(exact_response));
+        err = summarize_request("[[1]]", exact_response, needed + 1);
+        assert(err == BRIDGE_OK);
+        assert(strcmp(exact_response, response) == 0);
+        err = summarize_request("[[1]]", exact_response, needed);
+        assert(err == BRIDGE_ERR_BUFFER_TOO_SMALL);
+        assert(exact_response[0] == '\0');
+    }
 
     /* Empty inner array */
     err = summarize_request("[[]]", response, sizeof(response));

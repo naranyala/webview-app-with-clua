@@ -92,6 +92,14 @@ local function pkg_config(package_name, field)
   return read_command("pkg-config --" .. field .. " " .. shell_quote(package_name) .. " 2>/dev/null")
 end
 
+local function flag_list(text)
+  local flags = {}
+  for flag in text:gmatch("%S+") do
+    table.insert(flags, flag)
+  end
+  return flags
+end
+
 local function join_command(parts)
   local result = {}
   for _, part in ipairs(parts) do
@@ -196,10 +204,7 @@ local function build_native()
   if lua_libs == "" then
     fail("Lua development package not found: " .. lua_package)
   end
-  local flags = {}
-  for flag in (lua_cflags .. " " .. lua_libs):gmatch("%S+") do
-    table.insert(flags, flag)
-  end
+  local flags = flag_list(lua_cflags .. " " .. lua_libs)
   build_c_shared_library("metrics.so", { "src/metrics.c", "src/lua_metrics.c" }, {
     flags = flags,
   })
@@ -218,6 +223,29 @@ local function build_c_tests()
   build_c_executable("test_workspace_store", { "src/workspace_store.c", "tests/test_workspace_store.c" }, {
     output = root .. "/build/test_workspace_store",
   })
+
+  -- The host-plumbing tests link GTK (app_support.c owns the path chooser)
+  -- and resolve <webview/webview.h> through the test-only stub header.
+  local gtk_cflags = pkg_config("gtk+-3.0", "cflags")
+  local gtk_libs = pkg_config("gtk+-3.0", "libs")
+  if gtk_libs == "" then
+    fail("GTK 3 development package not found: pkg-config gtk+-3.0")
+  end
+  local host_flags = flag_list(gtk_cflags)
+  local host_libraries = flag_list(gtk_libs)
+  build_c_executable("test_app_support", { "src/app_support.c", "tests/test_app_support.c" }, {
+    output = root .. "/build/test_app_support",
+    includes = { root .. "/tests/stubs" },
+    flags = host_flags,
+    libraries = host_libraries,
+  })
+  build_c_executable("test_pdf_toc", { "src/pdf_toc.c", "src/app_support.c", "tests/test_pdf_toc.c" }, {
+    output = root .. "/build/test_pdf_toc",
+    includes = { root .. "/tests/stubs" },
+    defines = { [[PDFTOTEXT_EXECUTABLE='"pdftotext"']] },
+    flags = host_flags,
+    libraries = host_libraries,
+  })
 end
 
 local function build_all()
@@ -235,9 +263,12 @@ end
 
 local function test_native()
   build_c_tests()
+  require_executables({ "pdftotext" })
   run("./build/test_metrics", root)
   run("./build/test_bridge", root)
   run("./build/test_workspace_store", root)
+  run("./build/test_app_support", root)
+  run("./build/test_pdf_toc", root)
   require_executables({ "make" })
   run(make_command("lua-test"), root)
   run(make_command("sanitized-test"), root)

@@ -1,3 +1,8 @@
+/*
+ * Unit tests for the pure Image Viewer helpers: extension recognition,
+ * folder grouping from relative paths, and the leading "All Images" group.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {

@@ -1,3 +1,9 @@
+/*
+ * Pure helpers for the Image Viewer: which files count as images, how they
+ * group into folders, and how a browser FileList becomes data URLs under the
+ * same limits the native directory scan enforces.
+ */
+
 export const IMAGE_EXTENSIONS = [
   '.avif',
   '.bmp',

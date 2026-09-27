@@ -1,6 +1,15 @@
 #ifndef METRICS_H
 #define METRICS_H
 
+
+/*
+ * Online statistics engine (layer 1: pure computation).
+ *
+ * metrics_add() rejects non-finite values and refuses to overflow the running
+ * totals, so a non-zero metrics_error always means the aggregate is unchanged
+ * and safe to summarize.
+ */
+
 #include <stddef.h>
 
 typedef struct metrics_engine metrics_engine;

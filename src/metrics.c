@@ -1,3 +1,13 @@
+/*
+ * Online statistics engine: running count, sum, min/max, mean and population
+ * variance, accumulated with Welford's method.
+ *
+ * metrics_add() refuses non-finite values and refuses to overflow the running
+ * totals, so a caller can treat any non-zero metrics_error as a user error
+ * without the aggregate being poisoned. Layer 1 (pure computation): nothing
+ * here knows about the webview, GTK, or Lua.
+ */
+
 #include "metrics.h"
 
 #include <math.h>

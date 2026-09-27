@@ -1,3 +1,14 @@
+/*
+ * Workspace schema, normalization, storage, and the persistence report.
+ *
+ * One record holds the active view, the outline, the editor buffer, and both
+ * sessions. Reads always pass through normalizeWorkspace(), so a corrupt or
+ * legacy value degrades to a safe default instead of throwing; every storage
+ * failure is also recorded as a report (scope, code, message) that App.vue
+ * turns into the header pill. The same file owns the synchronous localStorage
+ * boot cache and the native loadWorkspace/saveWorkspace calls.
+ */
+
 export const WORKSPACE_KEY = 'native-workspace.workspace.v1';
 export const LEGACY_TOC_KEY = 'native-workspace.toc-items.v1';
 export const WORKSPACE_VERSION = 1;
@@ -148,6 +159,47 @@ function resolveStorage(storage) {
   }
 }
 
+let workspaceReport = null;
+
+/* Latest persistence failure, shaped for display: { scope, code, message, at }. */
+export function getWorkspaceReport() {
+  return workspaceReport;
+}
+
+export function clearWorkspaceReport() {
+  workspaceReport = null;
+}
+
+/* A confirmed write resolves a save problem, but never an earlier load one. */
+function clearSaveReport() {
+  if (workspaceReport && workspaceReport.scope === 'save')
+    workspaceReport = null;
+}
+
+/*
+ * Records a persistence failure so the UI can show it instead of leaving it in
+ * the console. Native bindings reject with { error: { code, message } } and
+ * also resolve with an error object, so both shapes are unwrapped here.
+ */
+function recordWorkspaceReport(scope, error, fallback) {
+  const source =
+    error && typeof error === 'object' && error.error !== undefined
+      ? error.error
+      : error;
+  const structured =
+    source &&
+    typeof source === 'object' &&
+    typeof source.code === 'string' &&
+    typeof source.message === 'string';
+  workspaceReport = {
+    scope,
+    code: structured ? source.code : fallback.code,
+    message: structured ? source.message : fallback.message,
+    at: Date.now(),
+  };
+  return workspaceReport;
+}
+
 function readJson(storage, key) {
   try {
     const stored = storage.getItem(key);
@@ -156,6 +208,17 @@ function readJson(storage, key) {
     return { found: true, value: JSON.parse(stored) };
   } catch (error) {
     console.error(`Could not read ${key}:`, error);
+    if (error instanceof SyntaxError) {
+      recordWorkspaceReport('load', null, {
+        code: 'INVALID_CONTENT',
+        message: 'The stored workspace is not valid JSON.',
+      });
+    } else {
+      recordWorkspaceReport('load', error, {
+        code: 'READ_FAILED',
+        message: 'The stored workspace could not be read.',
+      });
+    }
     return { found: false, value: null };
   }
 }
@@ -178,16 +241,30 @@ export function serializeWorkspace(state) {
 
 export function saveWorkspace(state, storage) {
   const store = resolveStorage(storage);
-  if (!store) return false;
+  if (!store) {
+    recordWorkspaceReport('save', null, {
+      code: 'WRITE_FAILED',
+      message: 'This browser does not allow local workspace storage.',
+    });
+    return false;
+  }
   try {
     const snapshot =
       state && typeof state === 'object' && Number(state.savedAt) > 0
         ? state
         : { ...state, savedAt: Date.now() };
     store.setItem(WORKSPACE_KEY, serializeWorkspace(snapshot));
+    clearSaveReport();
     return true;
   } catch (error) {
     console.error('Could not save the workspace:', error);
+    recordWorkspaceReport('save', error, {
+      code: 'WRITE_FAILED',
+      message:
+        error instanceof Error && error.name === 'QuotaExceededError'
+          ? 'Browser workspace storage is full.'
+          : 'The workspace could not be saved in this browser.',
+    });
     return false;
   }
 }
@@ -216,21 +293,49 @@ export function hasNativeWorkspaceStore() {
 /*
  * Loads the workspace written by the native host. Returns a normalized
  * workspace, or null when the binding is missing, the store is empty, or the
- * call failed. localStorage stays the synchronous boot cache.
+ * call failed. localStorage stays the synchronous boot cache. Empty is not a
+ * failure; every other null path records a report for the UI.
  */
 export async function loadWorkspaceNative() {
   const binding = nativeBinding(NATIVE_LOAD_COMMAND);
   if (!binding) return null;
   try {
     const result = await binding();
-    if (result?.ok !== true) return null;
+    if (result?.ok !== true) {
+      recordWorkspaceReport('load', result, {
+        code: 'READ_FAILED',
+        message: 'The saved workspace could not be loaded.',
+      });
+      console.error('Could not load the native workspace:', result);
+      return null;
+    }
     const workspace = result.workspace;
-    if (workspace === null || workspace === undefined) return null;
-    return normalizeWorkspace(
-      typeof workspace === 'string' ? JSON.parse(workspace) : workspace,
-    );
+    if (workspace === null || workspace === undefined) {
+      // Empty is not a failure: keep any report already explaining why the
+      // stored copy could not be used.
+      return null;
+    }
+    let parsed = workspace;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch (error) {
+        console.error('Could not parse the native workspace:', error);
+        recordWorkspaceReport('load', null, {
+          code: 'INVALID_CONTENT',
+          message: 'The saved workspace file is not valid JSON.',
+        });
+        return null;
+      }
+    }
+    clearWorkspaceReport();
+    return normalizeWorkspace(parsed);
   } catch (error) {
     console.error('Could not load the native workspace:', error);
+    recordWorkspaceReport('load', error, {
+      code: 'READ_FAILED',
+      message: 'The saved workspace could not be loaded.',
+    });
     return null;
   }
 }
@@ -256,12 +361,21 @@ export function saveWorkspaceNative(payload) {
       const result = await binding(serialized);
       if (result && result.ok === true) {
         lastNativePayload = serialized;
+        clearSaveReport();
         return true;
       }
       console.error('The native workspace store rejected the payload:', result);
+      recordWorkspaceReport('save', result, {
+        code: 'WRITE_FAILED',
+        message: 'The workspace file could not be written.',
+      });
       return false;
     } catch (error) {
       console.error('Could not save the native workspace:', error);
+      recordWorkspaceReport('save', error, {
+        code: 'WRITE_FAILED',
+        message: 'The workspace file could not be written.',
+      });
       return false;
     }
   });

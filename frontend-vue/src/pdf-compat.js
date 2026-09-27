@@ -1,3 +1,9 @@
+/*
+ * Promise.withResolvers polyfill for older WebKit builds, which pdfjs-dist
+ * assumes are present. pdf-session.js imports this first so it is in place
+ * before a worker is created.
+ */
+
 if (!Promise.withResolvers) {
   Promise.withResolvers = function withResolvers() {
     let resolve;

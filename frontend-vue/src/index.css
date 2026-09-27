@@ -1,3 +1,18 @@
+/*
+ * Single stylesheet for the workspace shell and all four tools.
+ *
+ * Order:
+ *   1. design tokens, base elements, assistive utilities, shared controls
+ *   2. Text Editor  (top bar, panes, draft surface)
+ *   3. app shell    (launcher header, workspace report, menu grid)
+ *   4. TOC Manager  (outline list, link panel)
+ *   5. PDF Reader   (toolbar, sidebar, page canvas)
+ *   6. lightbox and Image Viewer
+ *   7. responsive layout
+ *
+ * Long strings are constrained with min-width: 0, ellipsis, or line clamping
+ * so a wide file name or outline title never overflows its container.
+ */
 :root {
   color: #d6d9e0;
   background: #17191e;
@@ -60,6 +75,8 @@ button {
   grid-template-rows: 56px minmax(0, 1fr);
   background: #1d1f25;
 }
+/* --- Top bar, shared toolbar buttons, and Text Editor panes --- */
+
 .topbar {
   display: flex;
   align-items: center;
@@ -135,6 +152,7 @@ button {
   gap: 8px;
 }
 .toolbar-button {
+  flex-shrink: 0;
   padding: 6px 11px;
   border: 1px solid transparent;
   border-radius: 5px;
@@ -195,6 +213,7 @@ button {
   font-size: 0.72rem;
 }
 #cursor-position {
+  flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.04em;
 }
@@ -233,6 +252,8 @@ button {
   outline: 2px solid #8ab4f8;
   outline-offset: 2px;
 }
+/* --- App shell: launcher header, workspace report, and menu headings --- */
+
 .app-shell {
   background: #17191e;
 }
@@ -244,6 +265,34 @@ button {
   padding: 0 32px;
   border-bottom: 1px solid #2c3038;
   background: #20232a;
+}
+.header-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+.workspace-report {
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 12px;
+  border: 1px solid #7d3f3f;
+  border-radius: 999px;
+  background: #2c1e1e;
+  color: #f2a6a6;
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-report-dismiss {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #f2a6a6;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
 }
 .brand > div {
   display: grid;
@@ -282,6 +331,8 @@ button {
   color: #858c98;
   font-size: 0.92rem;
 }
+/* --- Menu grid and cards: one card per tool --- */
+
 .app-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 310px));
@@ -294,6 +345,7 @@ button {
   align-items: center;
   gap: 16px;
   min-height: 112px;
+  overflow: hidden;
   padding: 20px;
   border: 1px solid #353a44;
   border-radius: 10px;
@@ -342,18 +394,29 @@ button {
 }
 .app-card-copy {
   display: grid;
+  min-width: 0;
   gap: 7px;
 }
 .app-card-copy strong {
+  overflow: hidden;
   color: #f0f2f5;
   font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .app-card-copy small {
+  display: -webkit-box;
+  overflow: hidden;
   color: #858c98;
   font-size: 0.76rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .app-card-arrow {
+  flex-shrink: 0;
   color: #667080;
   font-size: 1.7rem;
 }
@@ -363,6 +426,8 @@ button {
   color: #f4d9a0;
   font-size: 0.72rem;
 }
+/* --- TOC Manager: toolbar, outline list, link panel, and empty state --- */
+
 .toc-manager {
   display: grid;
   min-height: calc(100vh - 72px);
@@ -400,6 +465,7 @@ button {
 }
 .toc-manager-actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
@@ -625,6 +691,8 @@ button {
   font-size: 0.85rem;
   line-height: 1.6;
 }
+/* --- PDF Reader: toolbar, sidebar outline, page canvas, and states --- */
+
 .pdf-app {
   display: grid;
   min-height: 0;
@@ -675,6 +743,7 @@ button {
 }
 .pdf-actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
@@ -751,6 +820,7 @@ button {
   color: #adb3be;
   font-size: 0.75rem;
   line-height: 1.4;
+  overflow-wrap: anywhere;
   text-align: left;
   cursor: pointer;
 }
@@ -865,6 +935,8 @@ body [hidden] {
     transform: rotate(360deg);
   }
 }
+/* --- Lightbox: full-screen image viewer and its attach controls --- */
+
 .lightbox {
   position: fixed;
   z-index: 2147483647;
@@ -907,9 +979,11 @@ body [hidden] {
   box-shadow: 0 16px 50px #000b;
 }
 .pdf-resume {
+  max-width: 100%;
   margin: 0;
   color: #aeb5c0;
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 .lightbox-attach {
   display: flex;
@@ -979,6 +1053,8 @@ body [hidden] {
   color: #a8e5c4;
   font-size: 0.72rem;
 }
+/* --- Image Viewer: toolbar, group sidebar, and thumbnail grid --- */
+
 .app-shell.image-active {
   height: 100vh;
   min-height: 0;
@@ -1027,6 +1103,7 @@ body [hidden] {
 }
 .image-actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 16px;
 }
@@ -1036,6 +1113,14 @@ body [hidden] {
 }
 .image-status.error {
   color: #f2a6a6;
+}
+.pdf-status,
+.image-status,
+.toc-manager-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .image-sidebar {
   min-height: 0;
@@ -1073,9 +1158,13 @@ body [hidden] {
   outline: none;
 }
 .image-group-button span {
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .image-group-button small {
+  flex-shrink: 0;
   color: #707987;
 }
 .image-content {
@@ -1147,6 +1236,8 @@ body [hidden] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* --- Responsive layout: sidebar collapses, then the grid stacks --- */
+
 @media (max-width: 1100px) {
   .app-grid {
     grid-template-columns: repeat(2, minmax(0, 330px));

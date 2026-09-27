@@ -1,3 +1,8 @@
+/*
+ * Unit tests for the reserved metrics helpers: value parsing and size limits,
+ * number formatting, bridge error decoding, and input validation classes.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {

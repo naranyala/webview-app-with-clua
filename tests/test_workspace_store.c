@@ -1,3 +1,11 @@
+/*
+ * Unit tests for the durable store: round-trip load/save, the size cap,
+ * atomic replace, is_object validation, and argument decoding.
+ *
+ * Every case writes TEST_FILE in the current directory and removes it, so the
+ * suite is safe to run from the Makefile in any order.
+ */
+
 #include "workspace_store.h"
 
 #include <assert.h>
@@ -152,6 +160,42 @@ int main(void) {
     decoded = workspace_store_decode_argument("[\"value\"]", NULL);
     assert_string_equals(decoded, "value");
     free(decoded);
+
+    /* Size cap boundary: exactly WORKSPACE_STORE_MAX_BYTES is accepted. */
+    oversized = malloc(WORKSPACE_STORE_MAX_BYTES);
+    assert(oversized != NULL);
+    memset(oversized, 'a', WORKSPACE_STORE_MAX_BYTES);
+    assert(workspace_store_save(TEST_PATH, oversized, WORKSPACE_STORE_MAX_BYTES) ==
+           WORKSPACE_STORE_OK);
+    loaded = load_into(&length, &result);
+    assert(result == WORKSPACE_STORE_OK);
+    assert(length == WORKSPACE_STORE_MAX_BYTES);
+    free(loaded);
+
+    /* A file one byte over the cap is refused before its contents are read. */
+    {
+        FILE *file = fopen(TEST_PATH, "wb");
+        assert(file != NULL);
+        assert(fwrite(oversized, 1, WORKSPACE_STORE_MAX_BYTES, file) == WORKSPACE_STORE_MAX_BYTES);
+        assert(fputc('a', file) != EOF);
+        assert(fclose(file) == 0);
+        loaded = load_into(&length, &result);
+        assert(result == WORKSPACE_STORE_ERR_TOO_LARGE);
+        assert(loaded == NULL);
+        assert(length == 0);
+    }
+    free(oversized);
+    remove_test_file();
+
+    /* Writing into a directory that does not exist fails instead of pretending. */
+    assert(workspace_store_save(TEST_DIRECTORY "/absent/workspace.json", "{}", 2) ==
+           WORKSPACE_STORE_ERR_WRITE);
+
+    /* A directory is not a workspace file: reading it reports a read error. */
+    loaded = workspace_store_load(TEST_DIRECTORY, &length, &result);
+    assert(loaded == NULL);
+    assert(result == WORKSPACE_STORE_ERR_READ);
+    assert(length == 0);
 
     remove_test_file();
     return 0;

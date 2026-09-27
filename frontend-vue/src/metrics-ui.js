@@ -1,3 +1,10 @@
+/*
+ * Reserved metrics helpers: parsing the comma/newline value list, formatting
+ * numbers with useful precision, and decoding a bridge {"error":...} payload
+ * into a message, category, and help text. The workspace UI does not call
+ * them today; they stay with their tests so the metrics tool can return.
+ */
+
 export function parseValues(raw) {
   if (typeof raw !== 'string') {
     return {

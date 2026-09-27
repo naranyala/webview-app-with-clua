@@ -42,10 +42,20 @@ engine. [`lua/native/core.lua`](../lua/native/core.lua) adds the convenience
 
 ### Desktop host
 
-[`src/webview_app.c`](../src/webview_app.c) loads the generated HTML file,
-creates the WebView, binds `summarize`, and runs the event loop. It does not
-embed Lua. The CMake desktop target links the metrics core and bridge parser
-directly.
+The host is split by concern so no translation unit owns more than one
+responsibility:
+
+| File | Layer |
+| --- | --- |
+| [`src/webview_app.c`](../src/webview_app.c) | entry point: creates the WebView, registers bindings, chooses the render mode |
+| [`src/app_support.c`](../src/app_support.c) | shared plumbing: JSON escaping, error replies, `file://` URLs, GTK path chooser |
+| [`src/pdf_toc.c`](../src/pdf_toc.c) | pure PDF heading extraction, per-document cache, JSON serialization |
+| [`src/pdf_session.c`](../src/pdf_session.c) | `openPdf` / `extractPdfToc` bindings and the extraction thread |
+| [`src/image_directory.c`](../src/image_directory.c) | `openImageDirectory` binding and the bounded directory scan |
+| [`src/workspace_bindings.c`](../src/workspace_bindings.c) | `loadWorkspace` / `saveWorkspace` bindings |
+
+It does not embed Lua. The CMake desktop target links the metrics core and
+bridge parser directly.
 
 ### Workspace store
 
@@ -58,10 +68,15 @@ synchronous boot cache because the inline render mode never persists it.
 
 ### Frontend
 
-[`frontend-vue/src/App.vue`](../frontend-vue/src/App.vue) owns reactive view
-switching, input parsing, loading/error states, PDF/TOC presentation, and result
-rendering. It does not calculate metrics itself. The production build inlines
-its assets into `frontend-vue/dist/index.html`.
+[`frontend-vue/src/App.vue`](../frontend-vue/src/App.vue) is the composition
+layer: it wires the session modules together, owns the watchers, the lifecycle
+hooks, and the persistence loop (snapshot, debounce, native write, restore,
+report), and renders the template. One module per concern holds the rest —
+`editor-session.js`, `pdf-session.js`, `image-session.js`, `toc-outline.js`,
+`app-shell.js`, `boot-state.js`, `native-bridge.js`, `workspace-report.js` —
+and dependencies only ever point from a module toward `workspace.js` or from
+`App.vue` toward a module. The host does not calculate metrics in the UI. The
+production build inlines its assets into `frontend-vue/dist/index.html`.
 
 ## Runtime sequence
 

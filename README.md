@@ -76,12 +76,22 @@ durable copy.
 ```text
 include/metrics.h              C metrics API
 include/workspace_store.h      Durable workspace storage API
+include/app_support.h          Shared native plumbing API (context, JSON, pickers)
+include/pdf_toc.h              PDF heading extraction and cache API
+include/pdf_session.h          PDF webview bindings API
+include/image_directory.h      Image directory binding API
+include/workspace_bindings.h   Workspace webview bindings API
 src/metrics.c                  C engine and stable population variance
 src/lua_metrics.c              Lua userdata binding
 lua/native/core.lua            Lua convenience API
 src/webview_bridge.c           Testable WebView request parser
 src/workspace_store.c          Atomic workspace file store and request decoding
-src/webview_app.c              WebView host and native binding
+src/webview_app.c              WebView host entry point and binding registry
+src/app_support.c              Shared JSON, error replies, and GTK path chooser
+src/pdf_toc.c                  PDF heading extraction, cache, serialization
+src/pdf_session.c              openPdf and extractPdfToc bindings
+src/image_directory.c          openImageDirectory binding and directory scan
+src/workspace_bindings.c       loadWorkspace and saveWorkspace bindings
 build.lua                      Main project build orchestrator
 frontend-vue/                  Vue desktop frontend and single-file build
 frontend-octane/               Legacy Octane frontend

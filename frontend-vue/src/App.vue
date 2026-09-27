@@ -1,133 +1,142 @@
 <script setup>
-import './pdf-compat.js';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import * as pdfWorker from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs';
 import {
   computed,
   nextTick,
   onBeforeUnmount,
   onMounted,
   ref,
-  shallowRef,
   watch,
 } from 'vue';
-import { groupImages, imagesFromFileList } from './image-viewer.js';
+
 import {
-  clampLevel,
+  hasUserInteracted,
+  onViewEnterPdf,
+  onViewLeaveEditor,
+  selectView,
+  view,
+} from './app-shell.js';
+import { restoredWorkspace } from './boot-state.js';
+import {
+  cursorPosition,
+  editorContent,
+  editorInput,
+  editorWordCount,
+  updateCursor,
+} from './editor-session.js';
+import {
+  activeLightboxImage,
+  changeLightbox,
+  closeLightbox,
+  handleLightboxKeydown,
+  imageDirectoryInput,
+  imageDirectoryName,
+  imageFiles,
+  imageGroups,
+  imageLoading,
+  imageStatus,
+  imageStatusError,
+  imagesBadge,
+  loadBrowserImageDirectory,
+  openImageDirectory,
+  openLightbox,
+  selectedImageGroup,
+  setImageStatus,
+  visibleImages,
+} from './image-session.js';
+import {
+  activePage,
+  changePdfPage,
+  disposePdfSession,
+  handlePdfFile,
+  handlePdfScroll,
+  navigateToPage,
+  openPdf,
+  pdfBadge,
+  pdfContentElement,
+  pdfDocument,
+  pdfDocumentId,
+  pdfFileInput,
+  pdfLoading,
+  pdfName,
+  pdfPageCount,
+  pdfPageNumber,
+  pdfRenderError,
+  pdfSessionSize,
+  pdfSourceUrl,
+  pdfStatus,
+  pdfStatusError,
+  pdfZoom,
+  renderAllPdfPages,
+  resumePdfSession,
+  scrollToPdfPage,
+  setPdfPageCanvas,
+  setPdfStatus,
+  tocCached,
+  tocCount,
+  tocHeadings,
+  tocMessage,
+  tocState,
+} from './pdf-session.js';
+import {
+  activeTocId,
+  activeTocIndex,
+  activeTocItem,
+  addTocItem,
+  attachImageToToc,
+  attachPdfPageToToc,
+  configureTocOutline,
+  importPdfHeadingsToToc,
+  linkTarget,
+  linkTargetId,
+  nextTocItem,
+  openLinkedImages,
+  openLinkedPdfPage,
+  previousTocItem,
+  removeTocItem,
+  selectTocItem,
+  syncTocDraft,
+  tocDraftLevel,
+  tocDraftTitle,
+  tocItemLabel,
+  tocItems,
+  tocStatus,
+  tocStatusError,
+} from './toc-outline.js';
+import {
   countWords,
-  createTocItem,
+  getWorkspaceReport,
   hasNativeWorkspaceStore,
-  loadWorkspace,
   loadWorkspaceNative,
   outlineSummary,
   saveWorkspace,
   saveWorkspaceNative,
   serializeWorkspace,
 } from './workspace.js';
+import { formatWorkspaceReport } from './workspace-report.js';
 
-globalThis.pdfjsWorker = pdfWorker;
-const getOpenPdf = () => {
-  if (typeof window.openPdf === 'function') return window.openPdf;
-  if (window.__webview__ && typeof window.__webview__.call === 'function') {
-    return () => window.__webview__.call('openPdf');
-  }
-  return null;
-};
-const getExtractPdfToc = () => {
-  if (typeof window.extractPdfToc === 'function') return window.extractPdfToc;
-  if (window.__webview__ && typeof window.__webview__.call === 'function') {
-    return () => window.__webview__.call('extractPdfToc');
-  }
-  return null;
-};
-const getOpenImageDirectory = () => {
-  if (typeof window.openImageDirectory === 'function')
-    return window.openImageDirectory;
-  if (window.__webview__ && typeof window.__webview__.call === 'function') {
-    return () => window.__webview__.call('openImageDirectory');
-  }
-  return null;
-};
+/*
+ * Composition layer.
+ *
+ * The four tools own their own state and behaviour in src/*-session.js,
+ * src/toc-outline.js, and src/app-shell.js; this file wires them together,
+ * owns cross-tool labels, and runs the persistence loop: snapshot, debounce,
+ * native write, restore, and the header report when either direction fails.
+ */
 
-const restoredWorkspace = loadWorkspace();
-let userInteracted = false;
+/* --- cross-tool labels ---------------------------------------------------- */
 
-const view = ref(restoredWorkspace.view);
-const editorContent = ref(restoredWorkspace.editor.content);
-const cursorPosition = ref('Line 1, Col 1');
-const editorInput = ref(null);
-
-const pdfFileInput = ref(null);
-const currentPdfUrl = ref('');
-const pdfName = ref(restoredWorkspace.pdf.name || 'No document selected');
-const pdfSessionSize = ref(restoredWorkspace.pdf.size);
-const pdfSourceUrl = ref(restoredWorkspace.pdf.url);
-const pdfDocumentId = ref(restoredWorkspace.pdf.documentId);
-const pdfStatus = ref('Choose a PDF from your system to begin reading.');
-const pdfStatusError = ref(false);
-const pdfDocument = shallowRef(null);
-const pdfContentElement = ref(null);
-const pdfPageCanvases = new Map();
-const pdfLoading = ref(false);
-const pdfRenderError = ref('');
-const pdfPageNumber = ref(restoredWorkspace.pdf.page);
-const pdfPageCount = ref(0);
-const pdfZoom = ref(restoredWorkspace.pdf.zoom);
-let pdfRenderToken = 0;
-const tocHeadings = ref([]);
-const tocCount = ref('No headings yet');
-const tocMessage = ref('Open a PDF to build its table of contents.');
-const tocState = ref('');
-const tocCached = ref(false);
-const activePage = ref(null);
-const persistenceMode = ref(hasNativeWorkspaceStore() ? 'native' : 'local');
-
-const tocItems = ref(restoredWorkspace.tocItems);
-const activeTocId = ref(
-  restoredWorkspace.tocItems.some(
-    (item) => item.id === restoredWorkspace.activeTocId,
-  )
-    ? restoredWorkspace.activeTocId
-    : null,
-);
-const linkTargetId = ref(
-  activeTocId.value || restoredWorkspace.tocItems[0]?.id || null,
-);
-const tocDraftTitle = ref('');
-const tocDraftLevel = ref(1);
-const tocStatus = ref(
-  'Declare an outline item, then select it to start writing.',
-);
-const tocStatusError = ref(false);
-
-const activeTocItem = computed(
-  () => tocItems.value.find((item) => item.id === activeTocId.value) || null,
-);
 const documentTitle = computed(() =>
   activeTocItem.value ? activeTocItem.value.title : 'untitled.txt',
 );
-const tocItemLabel = computed(
-  () =>
-    `${tocItems.value.length} item${tocItems.value.length === 1 ? '' : 's'} declared`,
-);
-const activeTocIndex = computed(() =>
-  tocItems.value.findIndex((item) => item.id === activeTocId.value),
-);
-const previousTocItem = computed(() =>
-  activeTocIndex.value > 0 ? tocItems.value[activeTocIndex.value - 1] : null,
-);
-const nextTocItem = computed(() =>
-  activeTocIndex.value >= 0 && activeTocIndex.value < tocItems.value.length - 1
-    ? tocItems.value[activeTocIndex.value + 1]
-    : null,
-);
-const editorWordCount = computed(() => countWords(editorContent.value));
+
 const outlineSummaryState = computed(() => outlineSummary(tocItems.value));
+
 const outlineBadge = computed(() => {
   const { total, written } = outlineSummaryState.value;
   if (total === 0) return 'Declare outline items, then write each section';
   return `${total} item${total === 1 ? '' : 's'} declared · ${written} written`;
 });
+
 const editorBadge = computed(() => {
   if (activeTocItem.value) {
     return `Writing “${activeTocItem.value.title}” · ${editorWordCount.value} words`;
@@ -137,33 +146,13 @@ const editorBadge = computed(() => {
   }
   return 'Write each section of your outline';
 });
-const pdfBadge = computed(() => {
-  if (pdfDocument.value) {
-    return pdfPageCount.value > 0
-      ? `${pdfName.value} · page ${pdfPageNumber.value} of ${pdfPageCount.value}`
-      : pdfName.value;
-  }
-  if (pdfName.value !== 'No document selected') {
-    return `Resume ${pdfName.value} · page ${pdfPageNumber.value}`;
-  }
-  return 'Open a PDF from your local system';
+
+const saveLabel = computed(() => {
+  if (persistenceMode.value === 'native') return 'saved to disk';
+  if (persistenceMode.value === 'local') return 'auto-saved';
+  return 'not saved';
 });
-const imagesBadge = computed(() => {
-  if (imageFiles.value.length > 0) {
-    const count = `${imageFiles.value.length} image${imageFiles.value.length === 1 ? '' : 's'}`;
-    return `${imageDirectoryName.value || 'Folder'} · ${count}`;
-  }
-  if (imageDirectoryName.value) {
-    return `${imageDirectoryName.value} · re-select to reload`;
-  }
-  return 'Browse images grouped by folder';
-});
-const linkTarget = computed(
-  () =>
-    tocItems.value.find((item) => item.id === linkTargetId.value) ||
-    activeTocItem.value ||
-    null,
-);
+
 const documentStatus = computed(() => {
   const words =
     editorWordCount.value === 0
@@ -181,50 +170,30 @@ const documentStatus = computed(() => {
   ].join(' · ');
 });
 
-const saveLabel = computed(() => {
-  if (persistenceMode.value === 'native') return 'saved to disk';
-  if (persistenceMode.value === 'local') return 'auto-saved';
-  return 'not saved';
+/* --- view transitions ----------------------------------------------------- */
+
+/* Leaving the editor flushes the draft; entering the PDF resumes its session. */
+onViewLeaveEditor(() => syncTocDraft());
+onViewEnterPdf(() => {
+  if (!pdfDocument.value && pdfSourceUrl.value) resumePdfSession();
 });
 
-const imageDirectoryInput = ref(null);
-const imageDirectoryName = ref(restoredWorkspace.images.directoryName);
-const imageGroups = ref([]);
-const imageFiles = ref([]);
-const selectedImageGroup = ref(restoredWorkspace.images.selectedGroup);
-const imageStatus = ref('Choose a parent directory to find images.');
-const imageStatusError = ref(false);
-const imageLoading = ref(false);
-const lightboxImage = ref(null);
-const lightboxIndex = ref(-1);
-const visibleImages = computed(() => {
-  if (selectedImageGroup.value === 'All Images') return imageFiles.value;
-  return (
-    imageGroups.value.find((group) => group.name === selectedImageGroup.value)
-      ?.images || []
-  );
-});
-const activeLightboxImage = computed(() =>
-  lightboxImage.value ? visibleImages.value[lightboxIndex.value] : null,
-);
+/* --- workspace persistence ------------------------------------------------ */
 
-function selectView(nextView) {
-  userInteracted = true;
-  if (view.value === 'editor' && nextView !== 'editor') syncTocDraft();
-  view.value = nextView;
-  if (nextView === 'editor') {
-    nextTick(() => editorInput.value?.focus());
-  }
-  if (nextView === 'pdf' && !pdfDocument.value && pdfSourceUrl.value) {
-    resumePdfSession();
-  }
+const persistenceMode = ref(hasNativeWorkspaceStore() ? 'native' : 'local');
+const workspaceReport = ref(null);
+
+/*
+ * Mirrors the latest persistence failure from workspace.js into a sentence the
+ * header can show. The report clears once the underlying problem is resolved.
+ */
+function refreshWorkspaceReport() {
+  workspaceReport.value = formatWorkspaceReport(getWorkspaceReport());
 }
 
-function setTocStatus(message, isError = false) {
-  tocStatus.value = message;
-  tocStatusError.value = isError;
-}
+refreshWorkspaceReport();
 
+/* Snapshot of everything worth restoring after a restart. */
 function workspaceState() {
   return {
     view: view.value,
@@ -248,27 +217,35 @@ function workspaceState() {
 
 let workspaceSaveTimer = 0;
 
+/*
+ * Writes the snapshot to localStorage first (synchronous boot cache) and then,
+ * when the host provides it, to the durable store. Failures are reported
+ * through the header pill rather than only the TOC status.
+ */
 function persistWorkspace() {
   const state = { ...workspaceState(), savedAt: Date.now() };
   const serialized = serializeWorkspace(state);
   const savedLocally = saveWorkspace(state);
   if (!hasNativeWorkspaceStore()) {
     persistenceMode.value = savedLocally ? 'local' : 'none';
+    refreshWorkspaceReport();
     return savedLocally;
   }
   saveWorkspaceNative(serialized).then((savedNatively) => {
     if (savedNatively) {
       persistenceMode.value = 'native';
+      refreshWorkspaceReport();
       return;
     }
     persistenceMode.value = savedLocally ? 'local' : 'none';
+    refreshWorkspaceReport();
     if (!savedLocally) {
       tocStatusError.value = true;
       tocStatus.value = 'The workspace could not be saved to this device.';
     }
   });
-  // The native write finishes later; failures surface through
-  // persistenceMode and the TOC status rather than this return value.
+  // The native write finishes later; failures surface through the header
+  // report, persistenceMode, and the TOC status rather than this return value.
   return true;
 }
 
@@ -285,15 +262,47 @@ function scheduleWorkspaceSave() {
   workspaceSaveTimer = setTimeout(flushWorkspace, 250);
 }
 
-function saveTocItems() {
-  userInteracted = true;
-  const saved = persistWorkspace();
-  tocStatusError.value = !saved;
-  if (!saved) {
-    tocStatus.value = 'The workspace could not be saved in this browser.';
-  }
-  return saved;
+/* The outline writes through this hook so it never imports this file back. */
+configureTocOutline({ persistNow: () => persistWorkspace() });
+
+/*
+ * Restores a snapshot into the session modules. Returns false when the
+ * snapshot is missing, so hydration can keep the boot state.
+ */
+function applyWorkspace(snapshot) {
+  if (!snapshot) return false;
+  const activeId = snapshot.tocItems.some(
+    (item) => item.id === snapshot.activeTocId,
+  )
+    ? snapshot.activeTocId
+    : null;
+  view.value = snapshot.view;
+  tocItems.value = snapshot.tocItems;
+  activeTocId.value = activeId;
+  linkTargetId.value = activeId || snapshot.tocItems[0]?.id || null;
+  editorContent.value = snapshot.editor.content;
+  pdfName.value = snapshot.pdf.name || 'No document selected';
+  pdfSessionSize.value = snapshot.pdf.size;
+  pdfSourceUrl.value = snapshot.pdf.url;
+  pdfDocumentId.value = snapshot.pdf.documentId;
+  pdfPageNumber.value = snapshot.pdf.page;
+  pdfZoom.value = snapshot.pdf.zoom;
+  imageDirectoryName.value = snapshot.images.directoryName;
+  selectedImageGroup.value = snapshot.images.selectedGroup;
+  return true;
 }
+
+/* Loads the durable copy once at startup, unless the user already acted. */
+async function hydrateNativeWorkspace() {
+  if (!hasNativeWorkspaceStore() || hasUserInteracted()) return false;
+  const snapshot = await loadWorkspaceNative();
+  refreshWorkspaceReport();
+  if (!snapshot || hasUserInteracted()) return false;
+  if (snapshot.savedAt < restoredWorkspace.savedAt) return false;
+  return applyWorkspace(snapshot);
+}
+
+/* --- watchers -------------------------------------------------------------- */
 
 watch(
   [
@@ -318,589 +327,33 @@ watch(activeTocId, (value) => {
   if (value) linkTargetId.value = value;
 });
 
-function syncTocDraft() {
-  const item = activeTocItem.value;
-  if (!item || item.content === editorContent.value) return;
-  userInteracted = true;
-  item.content = editorContent.value;
-  item.updatedAt = Date.now();
-  scheduleWorkspaceSave();
-}
-
-function addTocItem() {
-  const item = createTocItem({
-    title: tocDraftTitle.value,
-    level: tocDraftLevel.value,
-  });
-  if (!item) {
-    setTocStatus('Enter a heading title before declaring an item.', true);
-    return;
-  }
-  tocItems.value.push(item);
-  tocDraftTitle.value = '';
-  if (saveTocItems()) setTocStatus(`“${item.title}” declared.`);
-  nextTick(() => document.getElementById('toc-title-input')?.focus());
-}
-
-function removeTocItem(item) {
-  const index = tocItems.value.findIndex((entry) => entry.id === item.id);
-  if (index < 0) return;
-  tocItems.value.splice(index, 1);
-  if (activeTocId.value === item.id) activeTocId.value = null;
-  if (saveTocItems()) setTocStatus(`“${item.title}” removed from the outline.`);
-}
-
-function selectTocItem(item) {
-  syncTocDraft();
-  activeTocId.value = item.id;
-  editorContent.value = item.content ?? '';
-  selectView('editor');
-  nextTick(() => {
-    updateCursor();
-    editorInput.value?.focus();
-  });
-  setTocStatus(`Writing “${item.title}”.`);
-}
-
-function attachPdfPageToToc() {
-  const target = linkTarget.value;
-  if (!target) {
-    setPdfStatus('Select an outline item to attach this page to.', true);
-    return;
-  }
-  if (!pdfDocument.value) {
-    setPdfStatus('Open a PDF before attaching a page.', true);
-    return;
-  }
-  target.links.pdfPage = pdfPageNumber.value;
-  target.links.pdfName = pdfName.value;
-  target.updatedAt = Date.now();
-  if (saveTocItems()) {
-    setPdfStatus(`Page ${pdfPageNumber.value} attached to “${target.title}”.`);
-  }
-}
-
-function importPdfHeadingsToToc() {
-  const headings = tocHeadings.value;
-  if (headings.length === 0) {
-    setPdfStatus('Open a PDF first so there are headings to import.', true);
-    return;
-  }
-  let added = 0;
-  let skipped = 0;
-  for (const heading of headings) {
-    const title = String(heading?.title ?? '')
-      .trim()
-      .slice(0, 120);
-    if (!title) continue;
-    const page = Number.isFinite(Number(heading.page))
-      ? Math.max(1, Math.floor(Number(heading.page)))
-      : null;
-    const duplicate =
-      page !== null &&
-      tocItems.value.some(
-        (item) => item.title === title && item.links.pdfPage === page,
-      );
-    if (duplicate) {
-      skipped += 1;
-      continue;
-    }
-    const item = createTocItem({
-      title,
-      level: clampLevel(heading.level),
-      links: { pdfPage: page, pdfName: pdfName.value },
-    });
-    if (!item) continue;
-    tocItems.value.push(item);
-    added += 1;
-  }
-  if (saveTocItems()) {
-    const suffix = skipped > 0 ? ` · ${skipped} already present` : '';
-    setPdfStatus(
-      `Imported ${added} heading${added === 1 ? '' : 's'}${suffix}.`,
-    );
-  }
-}
-
-async function openLinkedPdfPage(item) {
-  const page = item?.links?.pdfPage;
-  if (!page) return;
-  selectView('pdf');
-  if (!pdfDocument.value) await resumePdfSession();
-  if (pdfDocument.value) {
-    navigateToPage(page);
-  } else {
-    setPdfStatus(`Open the source document to jump to page ${page}.`, true);
-  }
-}
-
-function attachImageToToc(image) {
-  const target = linkTarget.value;
-  const path = image?.relativePath;
-  if (!target || !path) {
-    setImageStatus('Select an outline item to attach this image to.', true);
-    return;
-  }
-  if (!target.links.images.includes(path)) target.links.images.push(path);
-  target.updatedAt = Date.now();
-  if (saveTocItems()) {
-    setImageStatus(`“${image.name}” attached to “${target.title}”.`);
-  }
-}
-
-function openLinkedImages(item) {
-  const paths = item?.links?.images || [];
-  if (paths.length === 0) return;
-  selectView('images');
-  const resolved = paths
-    .map((path) =>
-      imageFiles.value.find((image) => image.relativePath === path),
-    )
-    .filter(Boolean);
-  if (resolved.length > 0) {
-    selectedImageGroup.value = 'All Images';
-    openLightbox(resolved[0]);
-    return;
-  }
-  setImageStatus(
-    `${paths.length} attached image${paths.length === 1 ? '' : 's'} need the original folder to be selected again.`,
-    true,
-  );
-}
-
-function updateCursor() {
-  const input = editorInput.value;
-  if (!input) return;
-  const lines = input.value.slice(0, input.selectionStart ?? 0).split('\n');
-  cursorPosition.value = `Line ${lines.length}, Col ${(lines.at(-1)?.length ?? 0) + 1}`;
-}
-
-function setPdfStatus(message, isError = false) {
-  pdfStatus.value = message;
-  pdfStatusError.value = isError;
-}
-
-function setTocMessage(message, state = '') {
-  tocMessage.value = message;
-  tocState.value = state;
-  tocHeadings.value = [];
-}
-
-async function loadPdfToc() {
-  const extractToc = getExtractPdfToc();
-  if (!extractToc) {
-    setTocMessage('TOC extraction is available in the desktop app.');
-    tocCount.value = 'No headings yet';
-    return;
-  }
-  setTocMessage('Extracting headings and checking saved TOC…', 'loading');
-  tocCount.value = 'Extracting…';
+/*
+ * WebKit discards the bitmap of canvases rendered while the section was
+ * hidden, so returning to the reader repaints every page and restores the
+ * scroll position.
+ */
+watch(view, async (current, previous) => {
+  if (current !== 'pdf' || previous === 'pdf' || !pdfDocument.value) return;
+  await nextTick();
+  if (pdfLoading.value) return;
+  pdfLoading.value = true;
   try {
-    const result = await extractToc();
-    if (result.error) {
-      setTocMessage(
-        result.error.message || 'Could not extract headings from this PDF.',
-        'error',
-      );
-      tocCount.value = 'Extraction failed';
-      return;
-    }
-    const headings = Array.isArray(result.headings) ? result.headings : [];
-    if (headings.length === 0) {
-      setTocMessage('No headings were detected in this document.', 'empty');
-      tocCount.value = 'No headings detected';
-      return;
-    }
-    tocHeadings.value = headings;
-    tocCached.value = Boolean(result.cached);
-    tocCount.value = `${headings.length} heading${headings.length === 1 ? '' : 's'}`;
-    tocState.value = 'ready';
-    tocMessage.value = '';
+    await renderAllPdfPages();
   } catch (error) {
-    setTocMessage(
+    setPdfStatus(
       error instanceof Error
         ? error.message
-        : 'Could not extract headings from this PDF.',
-      'error',
+        : 'The PDF pages could not be redrawn.',
+      true,
     );
-    tocCount.value = 'Extraction failed';
-  }
-}
-
-function setPdfPageCanvas(element, pageNumber) {
-  if (element) pdfPageCanvases.set(pageNumber, element);
-}
-
-async function renderAllPdfPages() {
-  if (!pdfDocument.value) return;
-  const token = ++pdfRenderToken;
-  const pixelRatio = window.devicePixelRatio || 1;
-  for (
-    let pageNumber = 1;
-    pageNumber <= pdfDocument.value.numPages;
-    pageNumber += 1
-  ) {
-    if (token !== pdfRenderToken) return;
-    const canvas = pdfPageCanvases.get(pageNumber);
-    if (!canvas) continue;
-    const page = await pdfDocument.value.getPage(pageNumber);
-    if (token !== pdfRenderToken) return;
-    const viewport = page.getViewport({ scale: pdfZoom.value });
-    canvas.width = Math.floor(viewport.width * pixelRatio);
-    canvas.height = Math.floor(viewport.height * pixelRatio);
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
-    const renderTask = page.render({
-      canvasContext: canvas.getContext('2d'),
-      viewport,
-      transform: pixelRatio === 1 ? null : [pixelRatio, 0, 0, pixelRatio, 0, 0],
-    });
-    try {
-      await renderTask.promise;
-    } catch (error) {
-      if (error?.name !== 'RenderingCancelledException') throw error;
-    }
-  }
-}
-
-function handlePdfScroll() {
-  const content = pdfContentElement.value;
-  if (!content || pdfPageCount.value === 0) return;
-  const threshold = content.scrollTop + content.clientHeight * 0.25;
-  let currentPage = 1;
-  for (let page = 1; page <= pdfPageCount.value; page += 1) {
-    const canvas = pdfPageCanvases.get(page);
-    if (!canvas) continue;
-    if (
-      canvas.getBoundingClientRect().top -
-        content.getBoundingClientRect().top +
-        content.scrollTop <=
-      threshold
-    ) {
-      currentPage = page;
-    } else {
-      break;
-    }
-  }
-  activePage.value = currentPage;
-  pdfPageNumber.value = currentPage;
-}
-
-function scrollToPdfPage(page) {
-  const content = pdfContentElement.value;
-  const canvas = pdfPageCanvases.get(page);
-  if (!content || !canvas) return;
-  const top =
-    canvas.getBoundingClientRect().top -
-    content.getBoundingClientRect().top +
-    content.scrollTop -
-    16;
-  content.scrollTo({ top, behavior: 'smooth' });
-  activePage.value = page;
-}
-
-async function changePdfPage(offset) {
-  if (!pdfDocument.value) return;
-  pdfPageNumber.value = Math.min(
-    Math.max(pdfPageNumber.value + offset, 1),
-    pdfDocument.value.numPages,
-  );
-  await nextTick();
-  scrollToPdfPage(pdfPageNumber.value);
-}
-
-function navigateToPage(page) {
-  if (!pdfDocument.value) return;
-  pdfPageNumber.value = Math.min(Math.max(page, 1), pdfDocument.value.numPages);
-  nextTick(() => scrollToPdfPage(pdfPageNumber.value));
-}
-
-async function setPdfDocument(
-  name,
-  size,
-  url,
-  documentId = '',
-  sourceUrl = '',
-) {
-  currentPdfUrl.value = url;
-  pdfName.value = name;
-  pdfSessionSize.value = Math.max(0, Math.floor(Number(size) || 0));
-  pdfDocumentId.value = String(documentId || '');
-  pdfSourceUrl.value = String(sourceUrl).startsWith('file:')
-    ? String(sourceUrl)
-    : '';
-  pdfRenderError.value = '';
-  pdfRenderToken += 1;
-  pdfPageCanvases.clear();
-  pdfLoading.value = true;
-  pdfPageNumber.value = 1;
-  pdfPageCount.value = 0;
-  setPdfStatus(`Loading ${name}…`);
-  try {
-    if (pdfDocument.value) {
-      await pdfDocument.value.destroy();
-    }
-    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: false });
-    pdfDocument.value = await loadingTask.promise;
-    pdfPageCount.value = pdfDocument.value.numPages;
-    await nextTick();
-    await renderAllPdfPages();
-    setPdfStatus(
-      `${name} · ${(size / 1024 / 1024).toFixed(2)} MB · Page 1 of ${pdfPageCount.value}`,
-    );
-    activePage.value = 1;
-    loadPdfToc();
-  } catch (error) {
-    pdfDocument.value = null;
-    pdfRenderError.value =
-      error instanceof Error ? error.message : 'The PDF could not be rendered.';
-    setPdfStatus(pdfRenderError.value, true);
   } finally {
     pdfLoading.value = false;
   }
-}
+  await nextTick();
+  scrollToPdfPage(pdfPageNumber.value);
+});
 
-function handlePdfFile(event) {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  if (file.type && file.type !== 'application/pdf') {
-    setPdfStatus('The selected file is not a PDF.', true);
-    return;
-  }
-  if (currentPdfUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(currentPdfUrl.value);
-  }
-  setPdfDocument(file.name, file.size, URL.createObjectURL(file));
-  event.target.value = '';
-}
-
-async function openPdf() {
-  const openPdfFile = getOpenPdf();
-  if (!openPdfFile) {
-    pdfFileInput.value?.click();
-    return;
-  }
-  setPdfStatus('Waiting for the system file picker…');
-  try {
-    const opened = await openPdfFile();
-    if (opened.error) {
-      setPdfStatus(opened.error.message || 'Could not open the PDF.', true);
-      return;
-    }
-    if (opened.canceled) {
-      setPdfStatus('PDF selection was cancelled.');
-      return;
-    }
-    const url = String(opened.dataUrl || opened.url || '');
-    if (!url) {
-      setPdfStatus('The selected PDF did not provide a readable source.', true);
-      return;
-    }
-    await setPdfDocument(
-      String(opened.name || 'document.pdf'),
-      Number(opened.size || 0),
-      url,
-      String(opened.documentId || ''),
-      String(opened.url || ''),
-    );
-  } catch (error) {
-    setPdfStatus(
-      error instanceof Error ? error.message : 'Could not open the PDF.',
-      true,
-    );
-  }
-}
-
-let pdfResumePending = false;
-
-async function resumePdfSession() {
-  if (pdfDocument.value || pdfLoading.value || pdfResumePending) return;
-  const name = pdfName.value;
-  const savedPage = pdfPageNumber.value;
-  if (name === 'No document selected') return;
-  if (!pdfSourceUrl.value.startsWith('file:')) {
-    setPdfStatus(`Re-open ${name} to resume at page ${savedPage}.`);
-    return;
-  }
-  pdfResumePending = true;
-  setPdfStatus(`Restoring ${name}…`);
-  try {
-    await setPdfDocument(
-      name,
-      pdfSessionSize.value,
-      pdfSourceUrl.value,
-      pdfDocumentId.value,
-      pdfSourceUrl.value,
-    );
-    if (pdfDocument.value && savedPage > 1 && savedPage <= pdfPageCount.value) {
-      pdfPageNumber.value = savedPage;
-      await nextTick();
-      scrollToPdfPage(savedPage);
-      setPdfStatus(`${name} · page ${savedPage} of ${pdfPageCount.value}`);
-    } else if (!pdfDocument.value) {
-      pdfPageNumber.value = savedPage;
-      setPdfStatus(
-        `Could not re-open ${name} automatically. Use Browse files to pick it again.`,
-        true,
-      );
-    }
-  } finally {
-    pdfResumePending = false;
-  }
-}
-
-function setImageStatus(message, isError = false) {
-  imageStatus.value = message;
-  imageStatusError.value = isError;
-}
-
-function setImageCollection(images, directoryName) {
-  const normalized = Array.isArray(images)
-    ? images.filter((image) => image?.dataUrl)
-    : [];
-  imageFiles.value = normalized;
-  imageGroups.value = groupImages(normalized);
-  const wantedGroup = selectedImageGroup.value;
-  selectedImageGroup.value = imageGroups.value.some(
-    (group) => group.name === wantedGroup,
-  )
-    ? wantedGroup
-    : 'All Images';
-  imageDirectoryName.value = directoryName || 'Selected directory';
-  setImageStatus(
-    `${normalized.length} image${normalized.length === 1 ? '' : 's'} found.`,
-  );
-}
-
-function openLightbox(image) {
-  lightboxIndex.value = visibleImages.value.indexOf(image);
-  if (lightboxIndex.value >= 0) {
-    lightboxImage.value = image;
-    nextTick(() => document.querySelector('.lightbox')?.focus());
-  }
-}
-
-function changeLightbox(offset) {
-  if (visibleImages.value.length === 0) return;
-  lightboxIndex.value =
-    (lightboxIndex.value + offset + visibleImages.value.length) %
-    visibleImages.value.length;
-  lightboxImage.value = visibleImages.value[lightboxIndex.value];
-}
-
-function closeLightbox() {
-  lightboxImage.value = null;
-  lightboxIndex.value = -1;
-}
-
-function handleLightboxKeydown(event) {
-  if (!lightboxImage.value) return;
-  if (event.key === 'Escape') closeLightbox();
-  if (event.key === 'ArrowLeft') changeLightbox(-1);
-  if (event.key === 'ArrowRight') changeLightbox(1);
-}
-
-async function loadBrowserImageDirectory(event) {
-  const files = event.target.files;
-  if (!files?.length) return;
-  imageLoading.value = true;
-  setImageStatus('Reading images…');
-  try {
-    const result = await imagesFromFileList(files);
-    setImageCollection(
-      result.images,
-      files[0].webkitRelativePath?.split('/')[0] || 'Selected directory',
-    );
-    const skipped = result.skipped + result.oversized;
-    if (skipped > 0)
-      setImageStatus(
-        `${result.images.length} images loaded; ${skipped} skipped by browser limits.`,
-      );
-    else if (result.images.length === 0)
-      setImageStatus('No supported images were found in this directory.', true);
-  } catch (error) {
-    setImageStatus(
-      error instanceof Error
-        ? error.message
-        : 'Could not read the selected images.',
-      true,
-    );
-  } finally {
-    imageLoading.value = false;
-    event.target.value = '';
-  }
-}
-
-async function openImageDirectory() {
-  const openDirectory = getOpenImageDirectory();
-  if (!openDirectory) {
-    imageDirectoryInput.value?.click();
-    return;
-  }
-  imageLoading.value = true;
-  setImageStatus('Waiting for the system directory picker…');
-  try {
-    const result = await openDirectory();
-    if (result.error) {
-      setImageStatus(
-        result.error.message || 'Could not open the image directory.',
-        true,
-      );
-      return;
-    }
-    if (result.canceled) {
-      setImageStatus('Directory selection was cancelled.');
-      return;
-    }
-    const images = Array.isArray(result.images) ? result.images : [];
-    setImageCollection(images, result.name || 'Selected directory');
-    if (images.length === 0)
-      setImageStatus(
-        'No supported images were found within the directory limits.',
-        true,
-      );
-  } catch (error) {
-    setImageStatus(
-      error instanceof Error
-        ? error.message
-        : 'Could not open the image directory.',
-      true,
-    );
-  } finally {
-    imageLoading.value = false;
-  }
-}
-
-function applyWorkspace(snapshot) {
-  if (!snapshot) return false;
-  const activeId = snapshot.tocItems.some(
-    (item) => item.id === snapshot.activeTocId,
-  )
-    ? snapshot.activeTocId
-    : null;
-  view.value = snapshot.view;
-  tocItems.value = snapshot.tocItems;
-  activeTocId.value = activeId;
-  linkTargetId.value = activeId || snapshot.tocItems[0]?.id || null;
-  editorContent.value = snapshot.editor.content;
-  pdfName.value = snapshot.pdf.name || 'No document selected';
-  pdfSessionSize.value = snapshot.pdf.size;
-  pdfSourceUrl.value = snapshot.pdf.url;
-  pdfDocumentId.value = snapshot.pdf.documentId;
-  pdfPageNumber.value = snapshot.pdf.page;
-  pdfZoom.value = snapshot.pdf.zoom;
-  imageDirectoryName.value = snapshot.images.directoryName;
-  selectedImageGroup.value = snapshot.images.selectedGroup;
-  return true;
-}
-
-async function hydrateNativeWorkspace() {
-  if (!hasNativeWorkspaceStore() || userInteracted) return false;
-  const snapshot = await loadWorkspaceNative();
-  if (!snapshot || userInteracted) return false;
-  if (snapshot.savedAt < restoredWorkspace.savedAt) return false;
-  return applyWorkspace(snapshot);
-}
+/* --- lifecycle -------------------------------------------------------------- */
 
 function handleVisibilityChange() {
   if (document.visibilityState === 'hidden') flushWorkspace();
@@ -916,6 +369,7 @@ onMounted(async () => {
     await hydrateNativeWorkspace();
   } else {
     persistenceMode.value = savedLocally ? 'local' : 'none';
+    refreshWorkspaceReport();
   }
 
   if (view.value === 'pdf' && pdfSourceUrl.value) resumePdfSession();
@@ -942,12 +396,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', flushWorkspace);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   flushWorkspace();
-  pdfRenderToken += 1;
-  pdfPageCanvases.clear();
-  pdfDocument.value?.destroy();
-  if (currentPdfUrl.value.startsWith('blob:')) {
-    URL.revokeObjectURL(currentPdfUrl.value);
-  }
+  disposePdfSession();
 });
 </script>
 
@@ -961,9 +410,26 @@ onBeforeUnmount(() => {
           <span class="brand-subtitle">Local tools, one workspace</span>
         </div>
       </div>
-      <button class="toolbar-button subtle" id="back-to-menu" type="button" @click="selectView('menu')">
-        All apps
-      </button>
+      <div class="header-status">
+        <span
+          v-if="workspaceReport"
+          id="workspace-report"
+          class="workspace-report"
+          role="status"
+          :title="workspaceReport.text"
+        >{{ workspaceReport.text }}</span>
+        <button
+          v-if="workspaceReport"
+          id="dismiss-workspace-report"
+          class="workspace-report-dismiss"
+          type="button"
+          aria-label="Dismiss workspace report"
+          @click="workspaceReport = null"
+        >×</button>
+        <button class="toolbar-button subtle" id="back-to-menu" type="button" @click="selectView('menu')">
+          All apps
+        </button>
+      </div>
     </header>
 
     <section v-show="view === 'menu'" class="app-menu" data-view="menu" aria-label="Application menu">
@@ -977,7 +443,7 @@ onBeforeUnmount(() => {
           <span class="app-icon text-icon" aria-hidden="true">Aa</span>
           <span class="app-card-copy">
             <strong>Text Editor</strong>
-            <small>{{ editorBadge }}</small>
+            <small :title="editorBadge">{{ editorBadge }}</small>
           </span>
           <span class="app-card-arrow" aria-hidden="true">›</span>
         </button>
@@ -985,7 +451,7 @@ onBeforeUnmount(() => {
           <span class="app-icon pdf-icon" aria-hidden="true">PDF</span>
           <span class="app-card-copy">
             <strong>PDF Reader</strong>
-            <small>{{ pdfBadge }}</small>
+            <small :title="pdfBadge">{{ pdfBadge }}</small>
           </span>
           <span class="app-card-arrow" aria-hidden="true">›</span>
         </button>
@@ -993,7 +459,7 @@ onBeforeUnmount(() => {
           <span class="app-icon image-icon" aria-hidden="true">IMG</span>
           <span class="app-card-copy">
             <strong>Image Viewer</strong>
-            <small>{{ imagesBadge }}</small>
+            <small :title="imagesBadge">{{ imagesBadge }}</small>
           </span>
           <span class="app-card-arrow" aria-hidden="true">›</span>
         </button>
@@ -1001,7 +467,7 @@ onBeforeUnmount(() => {
           <span class="app-icon toc-manager-icon" aria-hidden="true">TOC</span>
           <span class="app-card-copy">
             <strong>TOC Manager</strong>
-            <small>{{ outlineBadge }}</small>
+            <small :title="outlineBadge">{{ outlineBadge }}</small>
           </span>
           <span class="app-card-arrow" aria-hidden="true">›</span>
         </button>
@@ -1015,7 +481,7 @@ onBeforeUnmount(() => {
           <strong id="toc-manager-count">{{ tocItemLabel }}</strong>
         </div>
         <div class="toc-manager-actions">
-          <span id="toc-manager-status" class="toc-manager-status" :class="{ error: tocStatusError }" aria-live="polite">{{ tocStatus }}</span>
+          <span id="toc-manager-status" class="toc-manager-status" :class="{ error: tocStatusError }" :title="tocStatus" aria-live="polite">{{ tocStatus }}</span>
           <button class="toolbar-button subtle" id="resume-writing" type="button" :disabled="!activeTocId" @click="selectView('editor')">Resume writing</button>
         </div>
       </header>
@@ -1125,8 +591,8 @@ onBeforeUnmount(() => {
           <strong>{{ imageDirectoryName || 'Choose an image directory' }}</strong>
         </div>
         <div class="image-actions">
-          <span id="image-status" class="image-status" :class="{ error: imageStatusError }" aria-live="polite">{{ imageStatus }}</span>
-          <button class="toolbar-button primary" id="open-image-directory" type="button" :disabled="imageLoading" @click="openImageDirectory">Choose directory</button>
+          <span id="image-status" class="image-status" :class="{ error: imageStatusError }" :title="imageStatus" aria-live="polite">{{ imageStatus }}</span>
+          <button v-show="imageFiles.length > 0" class="toolbar-button primary" id="open-image-directory" type="button" :disabled="imageLoading" @click="openImageDirectory">Choose directory</button>
         </div>
       </header>
       <aside class="image-sidebar" aria-label="Image folders">
@@ -1136,6 +602,7 @@ onBeforeUnmount(() => {
           :key="group.name"
           class="image-group-button"
           :class="{ active: selectedImageGroup === group.name }"
+          :title="group.name"
           type="button"
           @click="selectedImageGroup = group.name; closeLightbox()"
         >
@@ -1175,8 +642,8 @@ onBeforeUnmount(() => {
           <strong id="pdf-name">{{ pdfName }}</strong>
         </div>
         <div class="pdf-actions">
-          <span id="pdf-status" class="pdf-status" :class="{ error: pdfStatusError }" aria-live="polite">{{ pdfStatus }}</span>
-          <button class="toolbar-button primary" id="open-pdf" type="button" @click="openPdf">Open PDF</button>
+          <span id="pdf-status" class="pdf-status" :class="{ error: pdfStatusError }" :title="pdfStatus" aria-live="polite">{{ pdfStatus }}</span>
+          <button v-show="pdfDocument" class="toolbar-button primary" id="open-pdf" type="button" @click="openPdf">Open PDF</button>
         </div>
       </header>
       <aside class="toc-sidebar" aria-label="Document table of contents">
@@ -1270,3 +737,4 @@ onBeforeUnmount(() => {
     </Teleport>
   </main>
 </template>
+

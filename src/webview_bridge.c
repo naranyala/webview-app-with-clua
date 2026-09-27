@@ -1,3 +1,14 @@
+/*
+ * Request bridge for the metrics tool: one request string in, one JSON reply
+ * out.
+ *
+ * summarize_request() parses an argument of the form [[number, ...]],
+ * accumulates the values into a fresh engine, and writes either the summary
+ * object or {"error":{"code","message"}} into the caller's buffer. It never
+ * reads past the buffer and always terminates the reply, which is why the
+ * webview callback can hand the response straight to webview_return().
+ */
+
 #include "webview_bridge.h"
 
 #include "metrics.h"
@@ -41,6 +52,7 @@ static int write_summary(char *response, size_t response_size, const metrics_sum
     return 1;
 }
 
+/* Consumes the inner array of finite numbers; the first bad token ends parsing. */
 static bridge_error parse_number_array(const char **cursor_ref, metrics_engine *engine) {
     const char *cursor = *cursor_ref;
     int first = 1;
@@ -86,6 +98,7 @@ static bridge_error parse_number_array(const char **cursor_ref, metrics_engine *
     return BRIDGE_OK;
 }
 
+/* Public entry point: response is always terminated, empty on failure paths. */
 bridge_error summarize_request(const char *request, char *response, size_t response_size) {
     const char *cursor;
     metrics_engine *engine;

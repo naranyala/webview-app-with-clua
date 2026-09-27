@@ -34,7 +34,12 @@ const document = await window.openPdf();
 ```
 
 On the main GTK thread, the native callback opens a system file chooser limited
-to PDF files. It verifies that the selection is a regular readable file with a
+to PDF files. Both desktop pickers share one implementation in
+`src/app_support.c`: `run_path_chooser` builds the GTK dialog from a kind
+(`PICKER_OPEN_FILE` / `PICKER_SELECT_FOLDER`) and an optional file filter, and
+`dispatch_picker` performs the request bookkeeping for `openPdf` and
+`openImageDirectory` alike. The PDF-specific validation lives in
+`src/pdf_session.c`: it verifies that the selection is a regular readable file with a
 `%PDF-` header, then returns the display filename, byte size, a `documentId`, an
 encoded `file://` URL, and a `dataUrl` for files up to 32 MiB. The data URL lets
 PDF.js render native selections from an embedded WebView without relying on
@@ -48,6 +53,20 @@ restart can re-render the same document without another picker round trip. If
 the WebView refuses to fetch that URL, the reader falls back to an explicit
 re-open prompt; a native `restorePdf` command remains a conditional follow-up
 (see `TODOS.md`, TODO-032).
+
+## Image directory picker
+
+The image viewer calls the native `openImageDirectory` binding:
+
+```js
+const folder = await window.openImageDirectory();
+```
+
+It opens the same chooser in `PICKER_SELECT_FOLDER` mode, scans the folder for
+images within the size and count limits, and answers
+`{ "images": [...], "name": "...", "limited": false }` with base64 data URLs,
+or `{ "canceled": true }`. Outside the desktop host the frontend uses its own
+`input[webkitdirectory]` fallback instead.
 
 ## PDF heading extraction
 
@@ -96,7 +115,10 @@ const saved = await window.saveWorkspace(JSON.stringify(workspace));
 ```
 
 `workspace` is the stored document itself (already JSON, so it is embedded
-unescaped), or `null` when nothing has been written yet.
+unescaped), or `null` when nothing has been written yet. Non-empty bytes that
+are not a JSON object (a truncated or overwritten file) reject with
+`INVALID_CONTENT` instead of silently answering `null`, so the frontend can
+report the damaged copy rather than booting as if it were empty.
 
 `saveWorkspace` receives the serialized workspace as its single string
 argument and answers `{ "ok": true }`. Failures reject with the shared error
@@ -107,7 +129,8 @@ shape:
 ```
 
 Codes: `INVALID_ARGUMENT`, `INVALID_PAYLOAD`, `PAYLOAD_TOO_LARGE`,
-`READ_FAILED`, `WRITE_FAILED`, `INTERNAL_ERROR`.
+`READ_FAILED`, `INVALID_CONTENT` (load only), `WRITE_FAILED`,
+`INTERNAL_ERROR`.
 
 Both commands use `$XDG_DATA_HOME/native-workspace/workspace.json`
 (`g_get_user_data_dir()`), cap payloads at 4 MiB, and write atomically. The

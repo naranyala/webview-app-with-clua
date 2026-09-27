@@ -1,6 +1,16 @@
 #ifndef WEBVIEW_BRIDGE_H
 #define WEBVIEW_BRIDGE_H
 
+
+/*
+ * Bridge between the webview's request strings and the metrics engine
+ * (layer 2: pure work, but invoked from the host's request loop).
+ *
+ * summarize_request() consumes one request of the form [[number, ...]] and
+ * writes a JSON summary, or {"error":{"code","message"}}, into the caller's
+ * buffer. bridge_strerror() turns a bridge_error into a message for logs.
+ */
+
 #include <stddef.h>
 
 typedef enum {
