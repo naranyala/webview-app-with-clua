@@ -19,7 +19,12 @@ frontend-vue/
 ├── src/app-shell.js             active view and transition hooks
 ├── src/pdf-session.js           PDF load, render, paging, path history, heading panel
 ├── src/image-session.js         folder selection, grouping, lightbox
-├── src/map-explorer.js          Web Mercator tiles, pan/zoom, and the pin
+├── src/map-explorer.js          the map session: view state and interaction
+├── src/map-projection.js        Web Mercator projection, tile grid, layer transform
+├── src/map-input.js             what a wheel, drag, or key means
+├── src/map-canvas.js            the canvas tile renderer
+├── src/map-places.js            the persisted named-place collection
+├── src/geo.js                   coordinate primitives shared by map and schema
 ├── src/outline-pdf.js           workspace folder, combine action, generated file
 ├── src/toc-outline.js           outline items and cross-tool links
 ├── src/workspace.js             persistent workspace store and outline schema
@@ -48,7 +53,12 @@ template. Everything else lives in one module per concern:
 | `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
 | `pdf-session.js` | document loading, the canvas registry, paging, the remembered-path list, and the heading panel |
 | `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
-| `map-explorer.js` | the Web Mercator projection, the visible tile grid, pan/zoom, the pin, and `normalizeLocation()` — the one validator a stored place goes through |
+| `map-explorer.js` | the session only: the view state, tile loading and zoom commits, pan/zoom and inertia, the pointer, wheel, and keyboard handlers, the view options, and the viewport measurement |
+| `map-projection.js` | the pure geometry - `projectToPixel` / `unprojectFromPixel`, `visibleTiles`, `layerTransform`, `scaleBarFor`, `minimumZoomFor` - plus the tile and zoom constants. No state and no DOM, so the formulas are tested against known slippy-map tile numbers rather than through a session |
+| `map-input.js` | the gesture vocabulary: `classifyWheel`, the click-versus-drag threshold, the flick physics, and the key pan step. Pure functions, so a wheel's intent is testable without a map |
+| `map-canvas.js` | the canvas renderer: the decoded-bitmap cache, the frame coalescing, and the draw. Built from an accessor bundle rather than a session, so it is testable with a plain object and a stub image |
+| `map-places.js` | the saved-place collection: add, rename, remove, clear, and the inline-edit state — persisted through the workspace schema |
+| `geo.js` | `clampLatitude`, `wrapLongitude`, and `normalizeLocation()`. These live apart from the map so the schema can validate a stored coordinate without importing it; the import would otherwise close a cycle and leave the map's default arguments reading an uninitialised binding |
 | `toc-outline.js` | outline items, linking to pages, images, and places, draft sync, and JSON/text import/export |
 | `outline-pdf.js` | the one workspace folder, `renderOutlinePdf`, and the generated file's identity — the host owns the folder, so the webview never names a path to write into |
 
@@ -205,55 +215,147 @@ The four cards read and write one persisted record instead of isolated state:
 
 The fifth tool is a dependency-free tiled map. It adds no runtime package: the
 projection is the standard Web Mercator formula, and the tiles are ordinary
-`<img>` elements positioned by `visibleTiles()`.
+`<img>` elements.
 
-1. `projectToPixel` / `unprojectFromPixel` convert between coordinates and
-   global pixels, and `lonToTileX` / `latToTileY` give the fractional tile
-   index. The tests pin these against known slippy-map tile numbers (San
-   Francisco at z12 is 655/1583) rather than against the implementation.
-2. `visibleTiles()` returns the tiles covering the viewport, each already
-   offset in CSS pixels from its top-left corner, so the projection does the
-   scrolling and the DOM only positions absolute images.
-3. Dragging pans by unprojecting the pixel delta; the wheel zooms toward the
-   cursor. `zoomMap` unprojects the anchor at the old zoom, reprojects it at the
-   new one, and solves backwards for the centre — without the half-viewport term
-   the anchor drifts by half a screen per zoom step.
-4. A press and release within `CLICK_SLOP_PX` of each other drops the pin;
-   anything further is a pan. The threshold is measured from where the press
-   started, not from the last move, so a drag made of many small steps is still
-   a drag.
-5. The pane is `v-show`n, so it has no measurable size until the view is first
-   entered. App.vue starts the `ResizeObserver` and measures on entry; with no
-   size the tile list is empty and the pane says so rather than showing a blank
-   grid.
-6. There is no place search. Nominatim would need a second network dependency
-   and an identifying User-Agent the embedded WebView cannot send, and
-   Nominatim's usage policy is not satisfied by a bundled desktop app. Picking a
-   point needs nothing but the tiles.
+### How it is drawn
+
+Tiles never move in the DOM. Each sits at its absolute world-pixel position
+inside one layer, and the layer carries a single `translate3d(...) scale(...)`.
+Panning and zooming therefore write exactly one property that the compositor
+handles, instead of invalidating the layout of every tile on every frame — which
+is what made the first version stutter. `layerTransform()` is the whole map in one
+expression; a test places a real tile set through it and asserts the viewport has
+no gaps, at fractional zoom as well as whole.
+
+Zoom is a float, but tile servers serve whole levels, so the drawn set is
+committed at an integer `tileZoom` and the layer is scaled by
+`2^(zoom - tileZoom)` while a gesture runs. Pinching scales the tiles already on
+screen instead of blanking the map and fetching a new set dozens of times. The
+new set is committed when the gesture settles or drifts past
+`ZOOM_COMMIT_THRESHOLD`, at which point the scale is 1 again.
+
+One ring of tiles beyond the viewport is always requested (`TILE_BUFFER`), so
+panning almost never exposes a tile that was never fetched. The tile set is
+floored, so it only changes when the viewport actually crosses a tile line — a
+few pixels of drag do not churn the DOM.
+
+### How it is driven
+
+| Gesture | Result |
+| --- | --- |
+| Two-finger trackpad scroll | pans the map |
+| Trackpad pinch, or a mouse notch | zooms about the cursor, in fractions |
+| Drag | pans, with inertia on release |
+| Double click | zooms in about the click |
+| Arrows | pan; `shift` is a long step |
+| `+` / `-` | zoom about the centre |
+
+`classifyWheel()` decides the wheel's intent from its shape alone: `ctrl` (how a
+browser reports a pinch) zooms, a large pixel delta or a line-mode delta is a
+mouse notch and zooms, and anything small and pixel-valued is a trackpad scroll
+and pans. Zooming on the small deltas is what previously made panning feel
+impossible.
+
+### Saved places
+
+A place is a name plus a coordinate, and the two are inseparable: a record with
+no label is rejected, because a list of bare `51.507351, -0.127758` lines is not
+something anyone can scan. They are persisted in the workspace as `map.places`,
+capped at `MAX_SAVED_PLACES` (200), newest first.
+
+A place is separate from the outline's `links.location` on purpose. A place is
+somewhere you have been; a location link is somewhere a section is *about*. They
+meet at `attachPlaceToToc()`, which copies one into the other and reuses the
+existing link machinery - the `LOC` badge, the status line, and the schema
+validation all work unchanged.
+
+The list rules exist to keep the collection usable: re-picking a place that is
+already stored moves it to the top instead of creating a near-duplicate, a
+duplicate id in a stored list is dropped (it would make every rename hit two
+rows), and the cap is enforced on read as well as on write.
+
+Places appear in three places at once - as a row in the sidebar, as a labelled
+marker on the map, and as the thing the `Link` button attaches - and all three
+read the same collection.
+
+### Rendering options
+
+| Option | What it does |
+| --- | --- |
+| Colour filter | grayscale, dark, sepia, vivid, faded, or original. Applied to the tile layer or canvas as one CSS `filter`, so the browser filters a single element instead of compositing each tile |
+| Renderer | `DOM` draws a few dozen `<img>` tiles; `Canvas` draws the same set through the same `layerTransform()` onto one element |
+| Tile grid | A background locked to tile lines. The cell size carries the layer scale and the offset the layer translate, so the grid tracks the map exactly instead of drifting a pixel per pan |
+| Cursor readout | The coordinate under the pointer, updated on every move and cleared when it leaves or is switched off |
+| Sidebar | Collapsed by narrowing the column, not by unmounting, so the list keeps its scroll position and the canvas keeps a measured width |
+
+`MAP_FILTERS` is a closed list on both sides: each name has a matching
+`.map-canvas.filter-<name>` rule, and an unrecognised value - from a newer build,
+say - falls back to `none` rather than producing a class with no rules and a map
+with no way back.
+
+### How the map is split
+
+Six modules, layered so each one only depends on the ones above it:
+
+```
+geo.js            coordinate primitives; imports nothing
+map-projection.js geometry and layout;        -> geo
+map-input.js      gesture vocabulary;          imports nothing
+map-canvas.js     the canvas renderer;         imports nothing
+map-explorer.js   the session that composes them
+map-places.js     the saved-place collection
+```
+
+`geo.js` and `map-input.js` and `map-canvas.js` are leaves, which is what keeps
+the graph acyclic. That matters: an earlier version had the schema importing the
+map to get a coordinate validator, which closed
+`map -> boot-state -> workspace -> map` and left the map's default arguments
+reading an uninitialised binding. The rule that falls out of it is that a pure
+function is imported from wherever it is defined, never injected through a
+session - so `toc-outline.js` takes `normalizeLocation` from `geo.js` rather than
+from the map it is handed.
+
+**Why the canvas renderer is an option and not the default.** It removes every
+tile from the layout tree, which is what a slow pan pays for, but it needs its
+images decoded and drawn by hand and repainted on a frame. The DOM version lets
+the browser do that work. The canvas keeps a cache of decoded bitmaps keyed by
+tile, so panning back over ground already walked re-uses a bitmap rather than
+re-fetching, and drops the ones that leave the buffered set to bound the memory.
+The two differ in one visible way: only the DOM path can cross-fade the outgoing
+tile set, because the outgoing set belongs to the *previous* tile zoom and would
+need the previous transform to be placed correctly.
+
+### Staying inside the world
+
+Longitude wraps, so the map repeats indefinitely. Latitude does not: the world
+ends at the pole cut-off, so at high zoom a viewport centred near a pole extends
+past the top or bottom of the world, where no tile rows exist. The centre is
+pulled back inside, or centred outright when the world is shorter than the pane.
+
+At the other end, a world map shrinks with zoom, so at low levels it can be
+smaller than the window and there are simply no tiles for the rest. Rather than
+show that void, `minimumZoomFor()` raises the zoom floor until the world covers
+the viewport. The two together mean there is no zoom, pan, or window size at
+which the pane shows bare background.
+
+Also present: a scale bar in metric and imperial derived from the resolution at
+the current centre, a zoom readout that shows a decimal only between levels, a
+loading indicator, and the outgoing tile set held underneath the incoming one so
+a zoom commit fades rather than flashing.
 
 Tiles come from `openstreetmap.org` and the attribution is rendered
 permanently, not faded. A build distributed to many machines should point
 `tileUrl` at its own tile server; the public server's usage policy asks for an
-identifying User-Agent and forbids bulk downloading.
+identifying User-Agent and forbids bulk downloading, and every extra prefetch
+ring multiplies the requests it sees.
 
-## Combining the outline into one PDF
+There is no place search. Nominatim would need a second network dependency and
+an identifying User-Agent the embedded WebView cannot send, and Nominatim's usage
+policy is not satisfied by a bundled desktop app. Picking a point needs nothing
+but the tiles.
 
-The TOC Manager toolbar has two new controls. **Workspace folder…** asks the host
-for the single directory the combined file lives in; the host remembers the
-choice, so the webview cannot name a write target itself. **Combine to PDF**
-sends the outline to the host, which renders it and answers with the written
-file's path, page count, and size. A **Preview** button then opens that file in
-the existing PDF reader with `openPdfAt`.
-
-The payload is `exportTocJson()` — the same versioned envelope the Export button
-writes — so an export and a combined PDF can never disagree about what the
-outline contains. Nothing is held in memory between the two steps: the PDF is a
-file, and the preview opens it by path like any other document.
-
-The folder is stored in the workspace schema as `pdf.workspaceDirectory`, but
-only for display. The host owns the real path and re-asks after a fresh process,
-so a stale stored value can mislead without ever causing a write somewhere the
-user did not choose.
+Cairo's text shaping does not apply here, but the same limitation does apply to
+the outline PDF renderer: see the combined-PDF section for the text caveats.
 
 ## Bridge integration
 

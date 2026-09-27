@@ -66,3 +66,54 @@ test('Every template identifier resolves to a script-setup binding', () => {
     `template references with no script-setup binding: ${missing.join(', ')}`,
   );
 });
+
+/*
+ * A second wiring check, for the imports rather than the template.
+ *
+ * This resolves each session module for real and checks that every name App.vue
+ * imports from it is actually exported, which catches a rename or a removal on
+ * either side of an import statement.
+ *
+ * The other direction - a name used in the script and never imported - is not
+ * checkable this way, and is covered by biome's noUndeclaredVariables rule
+ * instead. Neither check was here when a missing `mapPlacesSnapshot` reached a
+ * build: every test passed, the app mounted, and only the smoke run reported it.
+ */
+test('every session import in App.vue is really exported', async () => {
+  const source = readFileSync(
+    new URL('../src/App.vue', import.meta.url),
+    'utf8',
+  );
+  const imports = [
+    ...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*'(\.\/[^']+)';/g),
+  ].map((match) => ({
+    names: match[1]
+      .split(',')
+      .map((name) =>
+        name
+          .trim()
+          .split(/\s+as\s+/)[0]
+          .trim(),
+      )
+      .filter(Boolean),
+    specifier: match[2],
+  }));
+
+  assert.ok(imports.length >= 8, `found ${imports.length} session imports`);
+
+  const problems = [];
+  for (const entry of imports) {
+    /* Components are .vue files, which node cannot import. */
+    if (entry.specifier.endsWith('.vue')) continue;
+    const module = await import(
+      new URL(`../src/${entry.specifier.slice(2)}`, import.meta.url)
+    );
+    for (const name of entry.names) {
+      if (!(name in module)) {
+        problems.push(`${entry.specifier} does not export ${name}`);
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], problems.join('; '));
+});

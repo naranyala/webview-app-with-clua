@@ -9,7 +9,7 @@
  * boot cache and the native loadWorkspace/saveWorkspace calls.
  */
 
-import { normalizeLocation } from './map-explorer.js';
+import { normalizeLocation } from './geo.js';
 import { getNativeBinding } from './native-bridge.js';
 
 export const WORKSPACE_KEY = 'native-workspace.workspace.v1';
@@ -27,6 +27,13 @@ const MAX_ZOOM = 2.5;
 export const MAX_RECENT_PATHS = 8;
 /* Paths are absolute filesystem paths, so the 4096 bound is generous but finite. */
 const MAX_PATH_LENGTH = 4096;
+/*
+ * Saved places, and the label length that keeps the sidebar rows scannable. The
+ * cap is generous for one person collecting a survey; past a couple of hundred
+ * the list stops being a list, and every entry is persisted.
+ */
+export const MAX_SAVED_PLACES = 200;
+export const MAX_PLACE_LABEL = 80;
 /* Exported because attaching an image must respect the cap a read enforces. */
 export const MAX_IMAGES_PER_ITEM = 64;
 
@@ -35,6 +42,11 @@ let idSequence = 0;
 function nextTocId() {
   idSequence += 1;
   return `toc-${Date.now().toString(36)}-${idSequence.toString(36)}`;
+}
+
+function nextPlaceId() {
+  idSequence += 1;
+  return `place-${Date.now().toString(36)}-${idSequence.toString(36)}`;
 }
 
 function asString(value, limit = 0) {
@@ -179,6 +191,63 @@ function normalizeImageSession(raw) {
   };
 }
 
+/*
+ * One saved place. The coordinates go through the map's own validator, so a
+ * hand-edited record reads as "no place" rather than putting NaN on the map, and
+ * the label is required: a list of bare coordinate pairs cannot be scanned.
+ */
+export function normalizePlace(raw) {
+  const place = raw && typeof raw === 'object' ? raw : {};
+  const coordinates = normalizeLocation(place);
+  const label = asString(place.label, MAX_PLACE_LABEL);
+  if (!coordinates || !label) return null;
+  return {
+    id: asString(place.id, 64) || nextPlaceId(),
+    label,
+    lat: coordinates.lat,
+    lon: coordinates.lon,
+    createdAt: Number(place.createdAt) || 0,
+  };
+}
+
+export function normalizePlaces(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const places = [];
+  for (const entry of raw) {
+    const place = normalizePlace(entry);
+    /* A duplicated id would make every rename and delete hit two rows. */
+    if (!place || seen.has(place.id)) continue;
+    seen.add(place.id);
+    places.push(place);
+    if (places.length >= MAX_SAVED_PLACES) break;
+  }
+  return places;
+}
+
+/*
+ * The Explorer's own state: the saved places plus the view options. These are
+ * persisted because a reader who found a good zoom level or turned the sidebar
+ * off expects to find it that way next launch, and because a saved place that
+ * vanished on restart would defeat the point of saving it.
+ */
+const MAP_FILTERS = ['none', 'grayscale', 'dark', 'sepia', 'vivid', 'faded'];
+
+function normalizeMapSession(raw) {
+  const map = raw && typeof raw === 'object' ? raw : {};
+  return {
+    places: normalizePlaces(map.places),
+    /* The sidebar is a workspace convenience, not a mode, so it defaults open. */
+    sidebarOpen: map.sidebarOpen !== false,
+    filter: MAP_FILTERS.includes(map.filter) ? map.filter : 'none',
+    /* 'dom' needs no canvas support and is the safe default; 'canvas' trades
+       decode and draw onto one element for a lot fewer nodes. */
+    renderer: map.renderer === 'canvas' ? 'canvas' : 'dom',
+    showGrid: Boolean(map.showGrid),
+    showCursor: map.showCursor !== false,
+  };
+}
+
 export function normalizeWorkspace(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const editor =
@@ -195,6 +264,7 @@ export function normalizeWorkspace(raw) {
     },
     pdf: normalizePdfSession(source.pdf),
     images: normalizeImageSession(source.images),
+    map: normalizeMapSession(source.map),
   };
 }
 

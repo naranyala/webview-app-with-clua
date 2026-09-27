@@ -84,6 +84,35 @@ Run:
 make pdf-toc-test
 ```
 
+### Map tests
+
+[`tests/map-explorer.test.js`](../tests/map-explorer.test.js) pins the
+projection against known slippy-map tile numbers rather than against the
+implementation, and covers the layer transform (including the two ways it is easy
+to get wrong: the scale's sign, and the fact that the translate must *not* be
+scaled), the prefetch ring, wheel intent, inertia, keyboard driving, the scale
+bar, and staying inside the world.
+
+[`tests/map-canvas.test.js`](../tests/map-canvas.test.js) builds the canvas
+renderer directly, with a recording context and a stub `Image`, and covers the
+draw path, the transform reaching the context, frame coalescing, cache eviction,
+and that a failed tile is not re-fetched every frame. It also asserts that the
+canvas and the DOM layer place a tile identically, since switching renderers
+would otherwise shift the map.
+
+[`tests/map-places.test.js`](../tests/map-places.test.js) covers the saved-place
+collection and the view options: the rules that keep a place list usable (a name
+is required, a repeat pick does not duplicate, the cap holds, a duplicate id is
+dropped), and the canvas renderer's draw path with an injected image factory,
+since node has no `Image` constructor.
+
+Two checks exist because wiring bugs here are invisible to unit tests. The smoke
+run is what catches an app that fails to mount. And biome's
+`noUndeclaredVariables` rule catches a name used in a `App.vue` script but never
+imported: such a build mounts, renders, and passes every test, then dies on the
+first click that reaches it. `template-bindings.test.js` covers the remaining
+direction, that every name App.vue imports is really exported.
+
 ### Combined outline PDF tests
 
 [`tests/test_outline_pdf.c`](../tests/test_outline_pdf.c) drives the

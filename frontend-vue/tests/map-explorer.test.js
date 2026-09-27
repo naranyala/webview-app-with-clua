@@ -1,10 +1,11 @@
 /*
- * Unit tests for the OpenStreetMap Explorer: the Web Mercator projection, the
- * tile grid, and the session's pan, zoom, and pin behaviour.
+ * Unit tests for the OpenStreetMap Explorer.
  *
- * The projection cases are pinned against known slippy-map tile numbers rather
- * than against this implementation, so a change to the formulas that breaks
- * real coordinates fails here instead of quietly shifting the map.
+ * The projection and layout cases are pinned against known slippy-map tile
+ * numbers rather than against this implementation, so a change to the formulas
+ * that breaks real coordinates fails here instead of quietly shifting the map.
+ * The projection and gesture-intent cases need no session and live alongside
+ * the pure modules they exercise; the rest drive createMapExplorer().
  */
 
 import assert from 'node:assert/strict';
@@ -12,21 +13,30 @@ import test from 'node:test';
 
 import {
   clampLatitude,
-  clampZoom,
-  createMapExplorer,
   formatCoordinates,
-  latToTileY,
-  lonToTileX,
   MAX_LATITUDE,
+  normalizeLocation,
+  wrapLongitude,
+} from '../src/geo.js';
+import { createMapExplorer } from '../src/map-explorer.js';
+import { classifyWheel, TRACKPAD_MAX_DELTA } from '../src/map-input.js';
+import {
+  clampZoom,
+  committedZoom,
+  latToTileY,
+  layerTransform,
+  lonToTileX,
   MAX_ZOOM,
   MIN_ZOOM,
-  normalizeLocation,
+  metersPerPixel,
+  minimumZoomFor,
+  projectToPixel,
+  scaleBarFor,
   TILE_SIZE,
   tileCount,
   unprojectFromPixel,
   visibleTiles,
-  wrapLongitude,
-} from '../src/map-explorer.js';
+} from '../src/map-projection.js';
 
 const close = (actual, expected, tolerance, message) =>
   assert.ok(
@@ -113,8 +123,71 @@ test('latitude, longitude, and zoom are clamped to what the tiles serve', () => 
 
   assert.equal(clampZoom(0), MIN_ZOOM);
   assert.equal(clampZoom(99), MAX_ZOOM);
-  assert.equal(clampZoom(12.4), 12);
   assert.equal(clampZoom('nonsense'), MIN_ZOOM);
+  /*
+   * Zoom is deliberately fractional - that is what makes a pinch continuous -
+   * so clamping preserves the fraction and only the tile level is rounded.
+   */
+  assert.equal(clampZoom(12.4), 12.4);
+  assert.equal(committedZoom(12.4), 12);
+  assert.equal(committedZoom(12.6), 13);
+  assert.equal(committedZoom(0.2), MIN_ZOOM);
+});
+
+test('a prefetch ring is always requested beyond the viewport', () => {
+  const base = {
+    centerLat: 51.507351,
+    centerLon: -0.127758,
+    zoom: 12,
+    width: 800,
+    height: 600,
+  };
+  const bare = visibleTiles({ ...base, buffer: 0 });
+  const buffered = visibleTiles({ ...base, buffer: 1 });
+
+  assert.ok(buffered.length > bare.length, 'a buffer adds tiles');
+  /* A one-tile buffer extends the grid by exactly one ring on every side, so
+     every tile the viewport needs is still present. */
+  for (const tile of bare) {
+    assert.ok(
+      buffered.some((candidate) => candidate.key === tile.key),
+      `buffered set dropped ${tile.key}`,
+    );
+  }
+  /* And it reaches at least a tile further out on every edge. */
+  const reach = (tiles, axis) =>
+    Math.max(...tiles.map((tile) => (axis === 'x' ? tile.left : tile.top))) -
+    Math.min(...tiles.map((tile) => (axis === 'x' ? tile.left : tile.top)));
+  assert.ok(reach(buffered, 'x') >= reach(bare, 'x') + 2 * TILE_SIZE - 1);
+  assert.ok(reach(buffered, 'y') >= reach(bare, 'y') + 2 * TILE_SIZE - 1);
+});
+
+test('the tile set only changes when a tile line is crossed', () => {
+  const base = {
+    centerLat: 0,
+    centerLon: 0,
+    zoom: 4,
+    width: 800,
+    height: 600,
+    buffer: 1,
+  };
+  const at = (x) => visibleTiles({ ...base, centerLon: x });
+  const a = at(0);
+  /* A few pixels of pan must not re-key the set, or Vue churns tiles mid-drag. */
+  assert.deepEqual(
+    at(0.0001).map((t) => t.key),
+    a.map((t) => t.key),
+  );
+  /* 0.5 degrees at zoom 4 is under six pixels, still inside one tile. */
+  assert.deepEqual(
+    at(0.5).map((t) => t.key),
+    a.map((t) => t.key),
+  );
+  /* One tile line at zoom 4 is 22.5 degrees of longitude. */
+  assert.notDeepEqual(
+    at(25).map((t) => t.key),
+    a.map((t) => t.key),
+  );
 });
 
 test('the tile grid covers the viewport and nothing outside it', () => {
@@ -126,13 +199,16 @@ test('the tile grid covers the viewport and nothing outside it', () => {
     zoom: 12,
     width,
     height,
+    buffer: 0,
   });
 
   /* At this viewport the origin lands mid-tile, so the grid is 5 x 4. */
   assert.equal(tiles.length, 20);
+  /* Positions are absolute world pixels on tile lines, so a tile never moves
+     when the view does; the layer transform is what places them. */
   for (const tile of tiles) {
-    assert.ok(tile.left > -TILE_SIZE && tile.left < width, `left ${tile.left}`);
-    assert.ok(tile.top > -TILE_SIZE && tile.top < height, `top ${tile.top}`);
+    assert.equal(tile.left % TILE_SIZE, 0, 'x lands on a tile line');
+    assert.equal(tile.top % TILE_SIZE, 0, 'y lands on a tile line');
     assert.ok(tile.x >= 0 && tile.x < tileCount(12), 'x in range');
     assert.ok(tile.y >= 0 && tile.y < tileCount(12), 'y in range');
   }
@@ -143,18 +219,31 @@ test('the tile grid covers the viewport and nothing outside it', () => {
   );
 
   /*
-   * The property that actually matters: the union of the returned rectangles has
-   * to cover the whole viewport, or the map shows holes. Walking the four edges
-   * and finding a gap is a stronger check than any fixed count.
+   * The property that actually matters: once the layer transform is applied, the
+   * tiles must cover every pixel of the viewport, or the map shows holes. This
+   * exercises the grid and the transform together, which is how they are used.
    */
+  const transform = layerTransform({
+    centerLat: 51.507351,
+    centerLon: -0.127758,
+    zoom: 12,
+    tileZoom: 12,
+    width,
+    height,
+  });
+  assert.equal(
+    transform.scale,
+    1,
+    'no scale when the view is at the tile zoom',
+  );
   const covers = (x, y) =>
-    tiles.some(
-      (tile) =>
-        x >= tile.left &&
-        x < tile.left + TILE_SIZE &&
-        y >= tile.top &&
-        y < tile.top + TILE_SIZE,
-    );
+    tiles.some((tile) => {
+      const left = tile.left * transform.scale + transform.x;
+      const top = tile.top * transform.scale + transform.y;
+      return (
+        x >= left && x < left + TILE_SIZE && y >= top && y < top + TILE_SIZE
+      );
+    });
   for (const x of [0, 1, width / 2, width - 2, width - 1]) {
     for (const y of [0, 1, height / 2, height - 2, height - 1]) {
       assert.ok(covers(x, y), `tile gap at ${x},${y}`);
@@ -163,7 +252,7 @@ test('the tile grid covers the viewport and nothing outside it', () => {
 });
 
 test('a viewport with no measured size asks for no tiles', () => {
-  const base = { centerLat: 0, centerLon: 0, zoom: 10 };
+  const base = { centerLat: 0, centerLon: 0, zoom: 10, buffer: 0 };
   assert.deepEqual(visibleTiles({ ...base, width: 0, height: 600 }), []);
   assert.deepEqual(visibleTiles({ ...base, width: 800, height: 0 }), []);
   assert.deepEqual(visibleTiles({ ...base, width: 0, height: 0 }), []);
@@ -176,6 +265,7 @@ test('panning past the antimeridian wraps columns instead of blanking them', () 
     zoom: 4,
     width: 1024,
     height: 256,
+    buffer: 0,
   });
   assert.ok(tiles.length > 0);
   for (const tile of tiles) {
@@ -213,6 +303,24 @@ test('a valid location is rounded to about a centimetre', () => {
     '51.507351, -0.127758',
   );
 });
+
+/* A session with a measured viewport and a stubbed element box. */
+function readyExplorer(options = {}) {
+  const explorer = createMapExplorer({
+    initialCenter: { lat: 0, lon: 0 },
+    initialZoom: 4,
+    ...options,
+  });
+  explorer.mapSize.value = { width: 512, height: 512 };
+  explorer.mapElement.value = {
+    clientWidth: 512,
+    clientHeight: 512,
+    setPointerCapture: () => {},
+    releasePointerCapture: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+  };
+  return explorer;
+}
 
 test('the session pins a clicked point without moving the map', () => {
   const explorer = createMapExplorer({
@@ -503,4 +611,492 @@ test('the observer is disconnected and the resize listener removed on dispose', 
 test('the pin is not offered when the map has never been measured', () => {
   const explorer = createMapExplorer();
   assert.deepEqual(explorer.mapTiles.value, []);
+});
+
+/* --- the layer transform --------------------------------------------------- */
+
+/*
+ * The transform is the whole map: one expression places every tile. These cases
+ * pin the two things it must get right - the centre stays at the middle of the
+ * viewport, and a fractional zoom scales about that same point.
+ */
+test('the transform keeps the centre at the middle of the viewport', () => {
+  const width = 800;
+  const height = 600;
+  for (const [lat, lon, zoom] of [
+    [0, 0, 4],
+    [51.507351, -0.127758, 12],
+    [-33.86882, 151.20929, 9],
+    [64.1466, -21.9426, 17],
+  ]) {
+    const transform = layerTransform({
+      centerLat: lat,
+      centerLon: lon,
+      zoom,
+      tileZoom: zoom,
+      width,
+      height,
+    });
+    assert.equal(transform.scale, 1);
+    /* The view's own centre, expressed in tile pixels and placed by the
+       transform, must land at half the viewport. */
+    const center = projectToPixel(lon, lat, zoom);
+    close(
+      center.x * transform.scale + transform.x,
+      width / 2,
+      1e-6,
+      'x centred',
+    );
+    close(
+      center.y * transform.scale + transform.y,
+      height / 2,
+      1e-6,
+      'y centred',
+    );
+  }
+});
+
+test('a fractional zoom scales the committed tile set about the centre', () => {
+  const base = { centerLat: 0, centerLon: 0, width: 800, height: 600 };
+  const at = (zoom, tileZoom = 4) =>
+    layerTransform({ ...base, zoom, tileZoom });
+
+  /* Zooming in past the committed level magnifies the tiles already drawn,
+     which is what makes a pinch continuous. */
+  const closer = at(4.25);
+  assert.ok(closer.scale > 1, 'zooming in magnifies');
+  close(closer.scale, 2 ** 0.25, 1e-9, 'by the zoom difference');
+  /*
+   * The centre must stay the middle of the viewport *after* scaling. A tile's
+   * position is in tile-zoom pixels, so the centre is expressed at the tile zoom
+   * too and placed as position * scale + translate. The translate is
+   * deliberately not scaled, and this is the case that catches one that is.
+   */
+  const centre = projectToPixel(0, 0, 4);
+  close(centre.x * closer.scale + closer.x, 400, 1e-6, 'still centred');
+  close(
+    centre.y * closer.scale + closer.y,
+    300,
+    1e-6,
+    'still centred vertically',
+  );
+
+  /* Zooming out below the committed level shrinks them instead. */
+  assert.ok(at(3.75).scale < 1, 'zooming out shrinks');
+
+  /* Once the two agree the scale is exactly 1, which is why committing the tile
+     set at the nearest level does not shift anything. */
+  assert.equal(at(4, 4).scale, 1);
+});
+
+test('the transform is one composited translate plus a scale', () => {
+  const transform = layerTransform({
+    centerLat: 0,
+    centerLon: 0,
+    zoom: 4.5,
+    tileZoom: 4,
+    width: 800,
+    height: 600,
+  });
+  assert.match(
+    transform.css,
+    /^translate3d\(-?[\d.]+px, -?[\d.]+px, 0\) scale\([\d.]+\)$/,
+  );
+});
+
+/* --- wheel intent ---------------------------------------------------------- */
+
+test('a pinch and a mouse notch zoom, a trackpad scroll pans', () => {
+  /* A trackpad pinch arrives as ctrl+wheel, whatever the delta. */
+  assert.equal(classifyWheel({ deltaY: -2, ctrlKey: true }), 'zoom');
+  assert.equal(classifyWheel({ deltaY: 2, ctrlKey: true }), 'zoom');
+  /* A notched wheel sends large pixel deltas, or line steps. */
+  assert.equal(classifyWheel({ deltaY: -100 }), 'zoom');
+  assert.equal(classifyWheel({ deltaY: 100 }), 'zoom');
+  assert.equal(classifyWheel({ deltaY: -3, deltaMode: 1 }), 'zoom');
+  /* A trackpad's two-finger scroll is small and pixel-valued: it must pan, or
+     the map zooms on every flick and cannot be panned at all. */
+  assert.equal(classifyWheel({ deltaY: -4 }), 'pan');
+  assert.equal(classifyWheel({ deltaY: 12 }), 'pan');
+  /* Exactly at the threshold is treated as a notch, so a slow scroll does not
+     creep. */
+  assert.equal(classifyWheel({ deltaY: -TRACKPAD_MAX_DELTA }), 'zoom');
+  assert.equal(classifyWheel({ deltaY: -(TRACKPAD_MAX_DELTA - 1) }), 'pan');
+  /* Shift is the conventional horizontal-pan modifier. */
+  assert.equal(classifyWheel({ deltaY: -4, shiftKey: true }), 'pan');
+  assert.equal(classifyWheel({ deltaY: -100, shiftKey: true }), 'pan');
+});
+
+test('the session pans on a trackpad scroll and zooms on a notch', () => {
+  const explorer = readyExplorer();
+  const before = explorer.mapCenter.value;
+
+  explorer.handleMapWheel({ deltaY: 8, deltaX: 0, preventDefault: () => {} });
+  assert.notDeepEqual(explorer.mapCenter.value, before, 'a scroll pans');
+  assert.equal(explorer.mapZoom.value, 4, 'a scroll does not zoom');
+
+  const panned = explorer.mapCenter.value;
+  explorer.handleMapWheel({
+    deltaY: -100,
+    ctrlKey: false,
+    preventDefault: () => {},
+  });
+  assert.equal(explorer.mapZoom.value, 5, 'a notch zooms');
+  assert.notDeepEqual(
+    explorer.mapCenter.value,
+    panned,
+    'zooming keeps the anchor',
+  );
+});
+
+test('a pinch moves the zoom in fractions and commits on settle', async () => {
+  const explorer = readyExplorer();
+
+  /* Several small pinch deltas: the zoom moves fractionally and the drawn tile
+     set does not change, so no new tiles are fetched mid-gesture. */
+  for (let step = 0; step < 5; step += 1) {
+    explorer.handleMapWheel({
+      deltaY: -6,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+      preventDefault: () => {},
+    });
+  }
+  assert.ok(explorer.mapZoom.value > 4, 'zoom increased');
+  assert.ok(explorer.mapZoom.value < 5, 'but not by a whole level yet');
+  assert.equal(
+    explorer.tileZoom.value,
+    4,
+    'the tile set has not been re-fetched',
+  );
+
+  /* Committing re-bases the drawn set on the nearest whole level. The view keeps
+     its fractional zoom - only the tiles snap to an integer, because only integer
+     levels have tiles. */
+  explorer.commitTileZoom();
+  assert.equal(explorer.tileZoom.value, committedZoom(explorer.mapZoom.value));
+  close(explorer.mapZoom.value, 4.125, 1e-9, 'the view stayed fractional');
+  close(
+    explorer.mapTransform.value.scale,
+    2 ** 0.125,
+    1e-9,
+    'tiles scaled to match',
+  );
+});
+
+test('a large pinch step still does not thrash the tile set', () => {
+  const explorer = readyExplorer();
+  const before = explorer.tileZoom.value;
+
+  /* Ten small deltas that add up to more than the commit threshold. */
+  for (let step = 0; step < 10; step += 1) {
+    explorer.handleMapWheel({
+      deltaY: -40,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+      preventDefault: () => {},
+    });
+  }
+  /* It may have re-committed, but only to whole levels - never a fractional
+     tile zoom, which has no tiles to serve. */
+  assert.equal(explorer.tileZoom.value, Math.round(explorer.tileZoom.value));
+  assert.ok(explorer.tileZoom.value > before, 'it did eventually zoom in');
+});
+
+/* --- inertia, double click, keyboard ---------------------------------------- */
+
+test('a flick glides and then stops, without dropping a pin', () => {
+  let clock = 0;
+  const frames = [];
+  const explorer = createMapExplorer({
+    initialCenter: { lat: 0, lon: 0 },
+    initialZoom: 4,
+    now: () => clock,
+    animate: (fn) => {
+      frames.push(fn);
+      return frames.length;
+    },
+    cancelFrame: () => {},
+  });
+  explorer.mapSize.value = { width: 512, height: 512 };
+  explorer.mapElement.value = {
+    setPointerCapture: () => {},
+    releasePointerCapture: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+  };
+
+  explorer.handleMapPointerDown({
+    button: 0,
+    pointerId: 1,
+    clientX: 300,
+    clientY: 300,
+  });
+  /* Two fast moves, then release. */
+  clock = 8;
+  explorer.handleMapPointerMove({ pointerId: 1, clientX: 260, clientY: 300 });
+  clock = 16;
+  explorer.handleMapPointerMove({ pointerId: 1, clientX: 220, clientY: 300 });
+  const dragged = explorer.mapCenter.value;
+  explorer.handleMapPointerUp({ pointerId: 1, clientX: 220, clientY: 300 });
+
+  assert.equal(explorer.mapPin.value, null, 'a flick does not drop a pin');
+  assert.ok(frames.length > 0, 'a glide was scheduled');
+
+  const started = explorer.mapCenter.value;
+  clock = 48;
+  frames.shift()();
+  assert.notDeepEqual(explorer.mapCenter.value, started, 'the map kept moving');
+  /* It coasts further in the same direction as the drag, not backwards. */
+  assert.ok(explorer.mapCenter.value.lon > dragged.lon, 'glided east');
+});
+
+test('a slow drag does not glide', () => {
+  let clock = 0;
+  const frames = [];
+  const explorer = createMapExplorer({
+    now: () => clock,
+    animate: (fn) => {
+      frames.push(fn);
+      return frames.length;
+    },
+    cancelFrame: () => {},
+  });
+  explorer.mapElement.value = {
+    setPointerCapture: () => {},
+    releasePointerCapture: () => {},
+  };
+  explorer.handleMapPointerDown({
+    button: 0,
+    pointerId: 1,
+    clientX: 300,
+    clientY: 300,
+  });
+  /* A long pause between press and move: the flick has already died. */
+  clock = 400;
+  explorer.handleMapPointerMove({ pointerId: 1, clientX: 299, clientY: 300 });
+  clock = 800;
+  explorer.handleMapPointerMove({ pointerId: 1, clientX: 298, clientY: 300 });
+  explorer.handleMapPointerUp({ pointerId: 1, clientX: 298, clientY: 300 });
+  assert.equal(frames.length, 0, 'no glide for a slow drag');
+});
+
+test('double click zooms in about the click', () => {
+  const explorer = readyExplorer();
+  const before = explorer.mapZoom.value;
+
+  explorer.handleMapDoubleClick({
+    clientX: 100,
+    clientY: 100,
+    preventDefault: () => {},
+  });
+
+  assert.equal(explorer.mapZoom.value, before + 1);
+  /* The clicked point stays where it was on screen. */
+  const after = explorer.locationFromEvent({ clientX: 100, clientY: 100 });
+  const anchor = unprojectFromPixel(
+    projectToPixel(0, 0, before).x - 256 + 100,
+    projectToPixel(0, 0, before).y - 256 + 100,
+    before,
+  );
+  close(after.lat, anchor.lat, 1e-6, 'latitude held');
+  close(after.lon, anchor.lon, 1e-6, 'longitude held');
+});
+
+test('the keyboard pans, zooms, and reports where it landed', () => {
+  const explorer = readyExplorer();
+  const start = { ...explorer.mapCenter.value };
+
+  /* Pressing Right moves the view east, so the centre moves east. (A drag is the
+     opposite: grabbing the map and pulling it right reveals the west.) */
+  explorer.handleMapKeydown({ key: 'ArrowRight', preventDefault: () => {} });
+  assert.ok(explorer.mapCenter.value.lon > start.lon, 'right moves east');
+
+  explorer.handleMapKeydown({ key: 'ArrowUp', preventDefault: () => {} });
+  assert.ok(explorer.mapCenter.value.lat > start.lat, 'up moves north');
+
+  const zoomed = explorer.mapZoom.value;
+  explorer.handleMapKeydown({ key: '+', preventDefault: () => {} });
+  assert.equal(explorer.mapZoom.value, zoomed + 1);
+  explorer.handleMapKeydown({ key: '-', preventDefault: () => {} });
+  assert.equal(explorer.mapZoom.value, zoomed);
+
+  /* Shift is the long step. */
+  const before = explorer.mapCenter.value.lon;
+  explorer.handleMapKeydown({
+    key: 'ArrowRight',
+    shiftKey: true,
+    preventDefault: () => {},
+  });
+  const short = explorer.mapCenter.value.lon;
+  explorer.handleMapKeydown({ key: 'ArrowLeft', preventDefault: () => {} });
+  explorer.handleMapKeydown({
+    key: 'ArrowLeft',
+    shiftKey: true,
+    preventDefault: () => {},
+  });
+  assert.ok(
+    before - short < short - explorer.mapCenter.value.lon,
+    'shift steps further',
+  );
+
+  /* A key the map does not use is left alone. */
+  const beforeTyping = explorer.mapZoom.value;
+  explorer.handleMapKeydown({ key: 'q', preventDefault: () => {} });
+  assert.equal(explorer.mapZoom.value, beforeTyping);
+  assert.match(explorer.mapStatus.value, /Centre/);
+});
+
+/* --- scale bar ------------------------------------------------------------- */
+
+test('the resolution halves with every zoom level', () => {
+  const equator = metersPerPixel(0, 10);
+  close(metersPerPixel(0, 11), equator / 2, 1e-12, 'one level is half');
+  /* Mercator stretches land toward the poles, so a pixel covers less ground
+     there: the resolution is finest at high latitude and coarsest at the equator. */
+  assert.ok(
+    metersPerPixel(60, 10) < equator,
+    'finer ground resolution up north',
+  );
+  close(metersPerPixel(60, 10), equator / 2, 1e-9, 'cos(60) is a half');
+  /* The equator at the minimum zoom: zoom 0 is below MIN_ZOOM and unreachable,
+     so the reference is halved by the clamp. */
+  close(
+    metersPerPixel(0, MIN_ZOOM),
+    156543.03392 / 2 ** MIN_ZOOM,
+    0.01,
+    'equator at the lowest zoom',
+  );
+});
+
+test('the scale bar picks a round distance that fits', () => {
+  for (const [lat, zoom] of [
+    [0, 4],
+    [51.5, 12],
+    [51.5, 15],
+    [-33.9, 10],
+  ]) {
+    const bar = scaleBarFor(lat, zoom, 120);
+    assert.ok(bar.pixels > 0, 'a distance was chosen');
+    assert.ok(bar.pixels <= 120.5, `fits the allowance at z${zoom}`);
+    assert.ok(bar.pixels >= 40, 'and is not a sliver');
+    /* Round numbers only: 1, 2 or 5 times a power of ten. */
+    const mantissa = bar.meters / 10 ** Math.floor(Math.log10(bar.meters));
+    assert.ok(
+      [1, 2, 5, 10].some((step) => Math.abs(mantissa - step) < 1e-6),
+      `mantissa ${mantissa} is not round`,
+    );
+    assert.ok(bar.label.length > 0 && bar.imperial.length > 0, 'both labels');
+  }
+  /* At zoom 4 a pixel is nearly 10 km, so 120px is about 1000 km. */
+  assert.equal(scaleBarFor(0, 4, 120).label, '1000 km');
+  assert.match(scaleBarFor(51.5, 15, 120).label, /^[0-9.]+ (m|km)$/);
+  /* Degenerate inputs do not divide by zero. */
+  assert.equal(scaleBarFor(0, 4, 0).pixels, 0);
+});
+
+/* --- loading state ---------------------------------------------------------- */
+
+test('tiles report in, and the loading flag clears when the set is complete', () => {
+  const explorer = readyExplorer();
+  const tiles = explorer.mapTiles.value;
+  assert.ok(tiles.length > 0, 'tiles were requested');
+  assert.equal(
+    explorer.mapLoading.value,
+    true,
+    'loading while none have landed',
+  );
+
+  for (const tile of tiles) explorer.noteTileLoaded(tile.key);
+  assert.equal(
+    explorer.mapLoading.value,
+    false,
+    'not loading once they all land',
+  );
+
+  /* A repeat report for the same tile is not counted twice. */
+  explorer.noteTileLoaded(tiles[0].key);
+  assert.equal(explorer.mapLoading.value, false);
+});
+
+/* --- staying inside the world ---------------------------------------------- */
+
+test('the zoom floor rises with the viewport so the world always covers it', () => {
+  /* Zoom 0 is a 256-pixel world; a 900-pixel pane would have no tiles for most
+     of its width, so the floor has to be higher than the module minimum. */
+  assert.equal(minimumZoomFor(0, 0), MIN_ZOOM, 'unmeasured falls back');
+  assert.equal(
+    minimumZoomFor(200, 200),
+    MIN_ZOOM,
+    'a small pane is fine at the floor',
+  );
+  assert.equal(
+    minimumZoomFor(900, 640),
+    2,
+    '900px needs zoom 2 (1024px world)',
+  );
+  assert.equal(minimumZoomFor(1920, 1000), 3, '1920px needs zoom 3');
+  assert.equal(minimumZoomFor(99999, 100), 9, 'a 100k-pixel pane needs zoom 9');
+  assert.equal(
+    minimumZoomFor(1e12, 1e12),
+    MAX_ZOOM,
+    'clamped to the maximum a pane could ever want',
+  );
+  /* The world at the floor must be at least as wide as the pane. */
+  for (const width of [300, 800, 1400, 2400]) {
+    assert.ok(
+      TILE_SIZE * 2 ** minimumZoomFor(width, 400) >= width,
+      `world covers ${width}px`,
+    );
+  }
+});
+
+test('a session cannot zoom out past what its viewport can cover', () => {
+  const explorer = readyExplorer();
+  const floor = explorer.minViewZoom.value;
+  for (let step = 0; step < 60; step += 1) zoomOutOf(explorer);
+  assert.equal(explorer.mapZoom.value, floor, 'stopped at the floor');
+
+  function zoomOutOf(target) {
+    target.zoomMap(-0.5);
+  }
+});
+
+test('panning near a pole is pulled back inside the world', () => {
+  const explorer = readyExplorer({
+    initialCenter: { lat: 84, lon: 0 },
+    initialZoom: 12,
+  });
+
+  /* Shove it hard toward the top of the world, where no tile rows exist. */
+  for (let step = 0; step < 40; step += 1) explorer.panMapByPixels(0, -400);
+
+  const world = TILE_SIZE * 2 ** explorer.mapZoom.value;
+  const center = projectToPixel(
+    0,
+    explorer.mapCenter.value.lat,
+    explorer.mapZoom.value,
+  );
+  /* The viewport's top edge must not be above the world, and its bottom must not
+     be below it: otherwise the pane shows bare background. */
+  assert.ok(center.y - 256 >= -0.5, 'not above the top edge');
+  assert.ok(center.y + 256 <= world + 0.5, 'not below the bottom edge');
+  assert.ok(
+    explorer.mapCenter.value.lat <= MAX_LATITUDE,
+    'latitude is representable',
+  );
+});
+
+test('a viewport taller than the world is centred on it, not clamped to an edge', () => {
+  /* At the minimum zoom the world can be shorter than the pane. */
+  const explorer = readyExplorer({ initialZoom: MIN_ZOOM });
+  for (let step = 0; step < 30; step += 1) explorer.panMapByPixels(0, 400);
+  const world = TILE_SIZE * 2 ** explorer.mapZoom.value;
+  const center = projectToPixel(
+    0,
+    explorer.mapCenter.value.lat,
+    explorer.mapZoom.value,
+  );
+  close(center.y, world / 2, 0.5, 'centred vertically');
 });

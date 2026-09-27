@@ -73,6 +73,14 @@ export function createWorkspacePersistence({
         recentPaths: sessions.imageRecentPaths.value,
         selectedGroup: sessions.selectedImageGroup.value,
       },
+      map: {
+        places: sessions.mapPlaces ? sessions.mapPlaces() : [],
+        sidebarOpen: sessions.mapSidebarOpen?.value ?? true,
+        filter: sessions.mapFilter?.value ?? 'none',
+        renderer: sessions.mapRenderer?.value ?? 'dom',
+        showGrid: sessions.mapShowGrid?.value ?? false,
+        showCursor: sessions.mapShowCursor?.value ?? true,
+      },
     };
   }
 
@@ -110,6 +118,24 @@ export function createWorkspacePersistence({
     sessions.imageDirectoryPath.value = incoming.images.directoryPath || '';
     sessions.imageRecentPaths.value = [...(incoming.images.recentPaths ?? [])];
     sessions.selectedImageGroup.value = incoming.images.selectedGroup;
+
+    /*
+     * The map's own state. Every field is optional here because a workspace
+     * written before the Explorer existed has no `map` at all, and a viewer that
+     * refuses to start over that would be a poor way to add a tool.
+     */
+    if (sessions.applyMapPlaces) sessions.applyMapPlaces(incoming.map?.places);
+    if (sessions.mapSidebarOpen)
+      sessions.mapSidebarOpen.value = incoming.map?.sidebarOpen !== false;
+    if (sessions.mapFilter)
+      sessions.mapFilter.value = incoming.map?.filter ?? 'none';
+    if (sessions.mapRenderer)
+      sessions.mapRenderer.value =
+        incoming.map?.renderer === 'canvas' ? 'canvas' : 'dom';
+    if (sessions.mapShowGrid)
+      sessions.mapShowGrid.value = Boolean(incoming.map?.showGrid);
+    if (sessions.mapShowCursor)
+      sessions.mapShowCursor.value = incoming.map?.showCursor !== false;
     return true;
   }
 

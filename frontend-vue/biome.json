@@ -33,7 +33,8 @@
     "rules": {
       "preset": "recommended",
       "correctness": {
-        "noUnusedVariables": "off"
+        "noUnusedVariables": "off",
+        "noUndeclaredVariables": "error"
       }
     }
   },

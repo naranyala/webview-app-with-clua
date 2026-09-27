@@ -23,6 +23,7 @@ import {
   withTextFileRead,
   withTextFileWrite,
 } from './file-io.js';
+import { normalizeLocation } from './geo.js';
 import * as imageSession from './image-session.js';
 import * as mapSession from './map-explorer.js';
 import * as pdfSession from './pdf-session.js';
@@ -721,6 +722,45 @@ export function createTocOutline({
     }
   }
 
+  /*
+   * Copies a saved place onto the selected outline item as its location link.
+   *
+   * This is the join between the two models: a place is somewhere the reader has
+   * been, a link is somewhere a section is about. The label rides along so the
+   * outline row and the map status can name the place rather than printing bare
+   * coordinates, and attaching replaces any previous location rather than adding
+   * a second one - a section is written about one place at a time.
+   */
+  function attachPlaceToToc(place) {
+    const target = linkTarget.value;
+    if (!target) {
+      setMapStatus('Select an outline item to attach this place to.', true);
+      return false;
+    }
+    if (!place) {
+      setMapStatus('Choose a saved place to attach.', true);
+      return false;
+    }
+    const location = normalizeLocation(place);
+    if (!location) {
+      setMapStatus('That place is not a usable coordinate.', true);
+      return false;
+    }
+    target.links.location = {
+      ...location,
+      label: String(place.label ?? location.label ?? '')
+        .trim()
+        .slice(0, 120),
+    };
+    target.updatedAt = Date.now();
+    if (saveTocItems()) {
+      setMapStatus(
+        `“${target.links.location.label}” attached to “${target.title}”.`,
+      );
+    }
+    return true;
+  }
+
   /* Switches to the explorer and centres it on the item's saved place. */
   function openLinkedLocation(item) {
     const location = item?.links?.location;
@@ -739,6 +779,7 @@ export function createTocOutline({
     attachImageToToc,
     attachLocationToToc,
     attachPdfPageToToc,
+    attachPlaceToToc,
     cancelTocEdit,
     configureTocOutline,
     createTocOutline,
@@ -797,6 +838,7 @@ export const addTocItem = outline.addTocItem;
 export const attachImageToToc = outline.attachImageToToc;
 export const attachLocationToToc = outline.attachLocationToToc;
 export const attachPdfPageToToc = outline.attachPdfPageToToc;
+export const attachPlaceToToc = outline.attachPlaceToToc;
 export const cancelTocEdit = outline.cancelTocEdit;
 export const configureTocOutline = outline.configureTocOutline;
 export const editingTocId = outline.editingTocId;

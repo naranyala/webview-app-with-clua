@@ -10,6 +10,7 @@ import {
 
 import {
   hasUserInteracted,
+  markUserInteracted,
   onViewLeaveEditor,
   selectView,
   view,
@@ -28,6 +29,7 @@ import {
   updateCursor,
 } from './editor-session.js';
 import { suggestFileName } from './file-io.js';
+import { formatCoordinates } from './geo.js';
 import {
   activeLightboxImage,
   changeLightbox,
@@ -54,29 +56,67 @@ import {
 } from './image-session.js';
 import {
   disposeMapExplorer,
-  formatCoordinates,
+  handleMapDoubleClick,
+  handleMapKeydown,
   handleMapPointerCancel,
   handleMapPointerDown,
+  handleMapPointerLeave,
   handleMapPointerMove,
   handleMapPointerUp,
   handleMapWheel,
   handleWindowResize,
   mapBadge,
+  mapCanvasContext,
+  mapCursorLocation,
   mapElement,
+  mapFilter,
+  mapFilters,
+  mapLoading,
+  mapPanning,
   mapPin,
   mapPinOffset,
+  mapRenderer,
+  mapScaleBar,
+  mapShowCursor,
+  mapShowGrid,
+  mapSidebarOpen,
   mapStatus,
   mapStatusError,
   mapTiles,
-  mapZoom,
+  mapTransform,
+  mapZoomLabel,
   measureMap,
+  noteTileLoaded,
+  placeMarkerOffset,
+  previousLayer,
+  setMapFilter,
+  setMapRenderer,
+  setMapShowCursor,
+  setMapShowGrid,
   setMapStatus,
   showMapLocation,
   startMapObserver,
   tileSource,
+  toggleMapSidebar,
   zoomIn,
   zoomOut,
 } from './map-explorer.js';
+import {
+  addPlace,
+  applyMapPlaces,
+  cancelPlaceEdit,
+  clearPlaces,
+  editingPlaceId,
+  mapPlacesSnapshot,
+  placeCount,
+  placeStatus,
+  placeStatusError,
+  places,
+  removePlace,
+  savePlaceEdit,
+  setPlaceStatus,
+  startPlaceEdit,
+} from './map-places.js';
 import {
   chooseWorkspaceDirectory,
   lastOutlinePdf,
@@ -132,6 +172,7 @@ import {
   attachImageToToc,
   attachLocationToToc,
   attachPdfPageToToc,
+  attachPlaceToToc,
   cancelTocEdit,
   configureTocOutline,
   editingTocId,
@@ -296,6 +337,13 @@ const persistence = createWorkspacePersistence({
     imageDirectoryPath,
     imageRecentPaths,
     selectedImageGroup,
+    mapPlaces: mapPlacesSnapshot,
+    applyMapPlaces,
+    mapSidebarOpen,
+    mapFilter,
+    mapRenderer,
+    mapShowGrid,
+    mapShowCursor,
   },
   store: {
     serializeWorkspace,
@@ -433,6 +481,54 @@ watch(view, (current, previous) => {
   if (current !== 'map' || previous === 'map') return;
   startMapObserverAfterPaint();
 });
+
+/* --- saved places and map view options ------------------------------------- */
+
+/* Human labels for the filter presets, so the control reads as a choice. */
+const FILTER_LABELS = {
+  none: 'Original colours',
+  grayscale: 'Grayscale',
+  dark: 'Dark',
+  sepia: 'Sepia',
+  vivid: 'Vivid',
+  faded: 'Faded',
+};
+
+function filterLabel(name) {
+  return FILTER_LABELS[name] || FILTER_LABELS.none;
+}
+
+/*
+ * Saves the current pin as a named place. The name is derived from the pin's own
+ * coordinates rather than prompting: a WebView prompt is unreliable, and an
+ * unnamed entry in a list of coordinates is not something anyone can scan. The
+ * reader renames it inline from the sidebar afterwards.
+ */
+function promptSavePlace() {
+  if (!mapPin.value) {
+    setPlaceStatus('Click the map to drop a pin first.', true);
+    return;
+  }
+  const place = addPlace({
+    lat: mapPin.value.lat,
+    lon: mapPin.value.lon,
+    label: mapPin.value.label || formatCoordinates(mapPin.value),
+  });
+  if (place) scheduleWorkspaceSave();
+}
+
+/* Centres the map on a saved place and drops the pin there. */
+function goToPlace(place) {
+  if (!place) return;
+  showMapLocation(place);
+}
+
+/* Marker position, or hidden when the place is nowhere near the view. */
+function markerStyle(place) {
+  const offset = placeMarkerOffset(place);
+  if (!offset) return { display: 'none' };
+  return { left: `${offset.left}px`, top: `${offset.top}px` };
+}
 
 /*
  * The outline combined into one PDF. The host owns the workspace folder, so
@@ -961,7 +1057,13 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-show="view === 'map'" class="map-app" data-view="map" aria-label="OpenStreetMap explorer">
+    <section
+      v-show="view === 'map'"
+      class="map-app"
+      :class="{ 'sidebar-closed': !mapSidebarOpen, 'canvas-mode': mapRenderer === 'canvas' }"
+      data-view="map"
+      aria-label="OpenStreetMap explorer"
+    >
       <header class="map-toolbar">
         <div>
           <span class="map-eyebrow">MAP EXPLORER</span>
@@ -975,7 +1077,7 @@ onBeforeUnmount(() => {
             :error="mapStatusError"
           />
           <button class="toolbar-button subtle" id="map-zoom-out" type="button" aria-label="Zoom out" @click="zoomOut">−</button>
-          <span class="map-coords">z{{ mapZoom }}</span>
+          <span class="map-coords">{{ mapZoomLabel }}</span>
           <button class="toolbar-button subtle" id="map-zoom-in" type="button" aria-label="Zoom in" @click="zoomIn">+</button>
           <label class="sr-only" for="map-link-target">Outline item</label>
           <select id="map-link-target" v-model="linkTargetId">
@@ -983,42 +1085,150 @@ onBeforeUnmount(() => {
             <option v-for="item in tocItems" :key="item.id" :value="item.id">{{ item.title }}</option>
           </select>
           <button class="toolbar-button primary" id="map-attach-location" type="button" :disabled="!linkTarget || !mapPin" @click="attachLocationToToc">Attach location</button>
+          <button class="toolbar-button subtle" id="map-toggle-sidebar" type="button" :aria-expanded="mapSidebarOpen" @click="toggleMapSidebar">
+            {{ mapSidebarOpen ? 'Hide places' : `Places (${placeCount})` }}
+          </button>
         </div>
       </header>
+
+      <div class="map-options" role="group" aria-label="Map rendering options">
+        <label class="sr-only" for="map-filter">Colour filter</label>
+        <select id="map-filter" :value="mapFilter" @change="setMapFilter($event.target.value)">
+          <option v-for="option in mapFilters" :key="option" :value="option">{{ filterLabel(option) }}</option>
+        </select>
+        <button
+          class="toolbar-button subtle"
+          id="map-toggle-renderer"
+          type="button"
+          :aria-pressed="mapRenderer === 'canvas'"
+          :title="mapRenderer === 'canvas' ? 'Drawing on a canvas; switch to DOM tiles' : 'Drawing DOM tiles; switch to a canvas'"
+          @click="setMapRenderer(mapRenderer === 'canvas' ? 'dom' : 'canvas')"
+        >{{ mapRenderer === 'canvas' ? 'Canvas' : 'DOM' }}</button>
+        <button class="toolbar-button subtle" id="map-toggle-grid" type="button" :aria-pressed="mapShowGrid" @click="setMapShowGrid(!mapShowGrid)">Grid</button>
+        <button class="toolbar-button subtle" id="map-toggle-cursor" type="button" :aria-pressed="mapShowCursor" @click="setMapShowCursor(!mapShowCursor)">Cursor</button>
+      </div>
+
       <!--
         role="application" with a tabindex: the map is a drag-and-wheel surface
         with no focusable children, so without them it could only be driven with
-        a mouse. aria-live is off on the readout because it changes on every pan
-        and would flood a screen reader mid-drag.
+        a mouse. The cursor readout is not a live region because it changes on
+        every pointer move and would flood a screen reader.
       -->
       <div
         id="map-canvas"
         ref="mapElement"
         class="map-canvas"
+        :class="[`filter-${mapFilter}`, { panning: mapPanning }]"
         role="application"
-        aria-label="OpenStreetMap. Click to drop a pin, drag to pan, scroll to zoom."
+        aria-label="OpenStreetMap. Click to drop a pin, drag or scroll to pan, pinch or use the zoom buttons to zoom, arrow keys to move."
         tabindex="0"
         @pointerdown="handleMapPointerDown"
         @pointermove="handleMapPointerMove"
         @pointerup="handleMapPointerUp"
         @pointercancel="handleMapPointerCancel"
+        @pointerleave="handleMapPointerLeave"
+        @dblclick="handleMapDoubleClick"
         @wheel="handleMapWheel"
+        @keydown="handleMapKeydown"
       >
-        <img
-          v-for="tile in mapTiles"
-          :key="tile.key"
-          class="map-tile"
-          :src="tileSource(tile)"
-          :style="{ left: `${tile.left}px`, top: `${tile.top}px` }"
-          alt=""
+        <!--
+          The canvas renderer draws the same tile set, through the same
+          layerTransform(), onto one element instead of a few dozen images. It
+          keeps every tile out of the layout tree, which is what a slow pan pays
+          for, at the cost of doing the decode and draw by hand.
+        -->
+        <canvas
+          v-if="mapRenderer === 'canvas'"
+          id="map-canvas-surface"
+          ref="mapCanvasContext"
+          class="map-surface"
           aria-hidden="true"
-          draggable="false"
-        />
+        ></canvas>
+        <template v-else>
+          <!--
+            Each layer carries its own single transform. The outgoing set keeps
+            the transform it was drawn with, because its tiles are positioned at
+            the previous tile zoom and would otherwise be placed at the wrong
+            scale during the fade.
+          -->
+          <div
+            v-if="previousLayer"
+            class="map-tile-layer map-tile-layer-previous"
+            aria-hidden="true"
+            :style="{ transform: previousLayer.transform.css }"
+          >
+            <img
+              v-for="tile in previousLayer.tiles"
+              :key="`old-${tile.key}`"
+              class="map-tile"
+              :src="tileSource(tile)"
+              :style="{ left: `${tile.left}px`, top: `${tile.top}px` }"
+              alt=""
+              draggable="false"
+            />
+          </div>
+          <div class="map-tile-layer" :style="{ transform: mapTransform.css }">
+            <img
+              v-for="tile in mapTiles"
+              :key="tile.key"
+              class="map-tile"
+              :src="tileSource(tile)"
+              :style="{ left: `${tile.left}px`, top: `${tile.top}px` }"
+              alt=""
+              aria-hidden="true"
+              draggable="false"
+              decoding="async"
+              @load="noteTileLoaded(tile.key)"
+              @error="noteTileLoaded(tile.key)"
+            />
+          </div>
+        </template>
+        <!--
+          The grid is a background on the canvas rather than an element, because
+          it has to stay aligned to tile lines while the layer moves. The cell
+          size carries the layer scale and the offset carries the translate, so
+          the grid tracks the map exactly instead of drifting a pixel per pan.
+        -->
+        <div
+          v-if="mapShowGrid"
+          class="map-grid-overlay"
+          aria-hidden="true"
+          :style="{
+            backgroundSize: `${256 * mapTransform.scale}px ${256 * mapTransform.scale}px`,
+            backgroundPosition: `${mapTransform.x % (256 * mapTransform.scale)}px ${mapTransform.y % (256 * mapTransform.scale)}px`,
+          }"
+        ></div>
+        <!-- Saved places, drawn over the tiles and before the live pin. -->
+        <button
+          v-for="place in places"
+          :key="place.id"
+          v-show="placeMarkerOffset(place)"
+          class="map-place-marker"
+          type="button"
+          :style="markerStyle(place)"
+          :title="`${place.label} · ${formatCoordinates(place)}`"
+          :aria-label="`Go to ${place.label}`"
+          @click="goToPlace(place)"
+        ><span class="map-place-marker-label">{{ place.label }}</span></button>
         <span
           v-if="mapPin && mapPinOffset"
           class="map-pin"
           :style="{ left: `${mapPinOffset.left}px`, top: `${mapPinOffset.top}px` }"
         ></span>
+        <span
+          v-if="mapShowCursor && mapCursorLocation"
+          class="map-cursor-readout"
+          aria-hidden="true"
+        >{{ formatCoordinates(mapCursorLocation) }}</span>
+        <!--
+          The scale bar is derived from the resolution at the current centre, so
+          it stays honest as the map pans north and south.
+        -->
+        <div v-if="mapScaleBar.pixels" class="map-scale-bar">
+          <span class="map-scale-rule" :style="{ width: `${mapScaleBar.pixels}px` }"></span>
+          <span class="map-scale-label">{{ mapScaleBar.label }} · {{ mapScaleBar.imperial }}</span>
+        </div>
+        <span v-if="mapLoading" class="map-loading" role="status">Loading tiles…</span>
         <span class="map-attribution">
           © <a href="https://www.openstreetmap.org/copyright" rel="noreferrer noopener" target="_blank">OpenStreetMap</a> contributors
         </span>
@@ -1027,6 +1237,80 @@ onBeforeUnmount(() => {
           <p>The tile area has not been measured yet. Tiles need a network connection.</p>
         </div>
       </div>
+
+      <!--
+        The saved places. Collapsed by hiding the column rather than unmounting,
+        so the list keeps its scroll position and the map keeps its measured
+        width - which matters, because a pane that is not in the layout has no
+        size and therefore no tiles.
+      -->
+      <aside class="map-sidebar" :class="{ closed: !mapSidebarOpen }" aria-label="Saved places">
+        <div class="map-sidebar-heading">
+          <span>SAVED PLACES</span>
+          <strong id="map-place-count">{{ placeCount }}</strong>
+        </div>
+        <div class="map-sidebar-actions">
+          <button
+            class="toolbar-button primary"
+            id="map-save-place"
+            type="button"
+            :disabled="!mapPin"
+            :title="mapPin ? `Save the pin as a named place` : 'Click the map to drop a pin first'"
+            @click="promptSavePlace"
+          >Save pin</button>
+          <button class="toolbar-button subtle" id="map-clear-places" type="button" :disabled="placeCount === 0" @click="clearPlaces">Clear</button>
+        </div>
+        <StatusLine
+          id="map-place-status"
+          class="map-place-status"
+          :message="placeStatus"
+          :error="placeStatusError"
+        />
+        <p v-if="editingPlaceId" class="map-place-editing-hint">Editing a name — Enter to save, Escape to cancel.</p>
+        <ul v-if="placeCount" class="map-place-list">
+          <li
+            v-for="place in places"
+            :key="place.id"
+            class="map-place-row"
+            :class="{ active: mapPin && mapPin.lat === place.lat && mapPin.lon === place.lon }"
+          >
+            <form v-if="editingPlaceId === place.id" class="map-place-edit" @submit.prevent="savePlaceEdit(place.id, $event.target.elements.name.value)">
+              <label class="sr-only" :for="`place-name-${place.id}`">Place name</label>
+              <input
+                :id="`place-name-${place.id}`"
+                name="name"
+                type="text"
+                :value="place.label"
+                maxlength="80"
+                autocomplete="off"
+                @keydown.esc="cancelPlaceEdit"
+              />
+              <button class="toolbar-button primary" type="submit">Save</button>
+              <button class="toolbar-button subtle" type="button" @click="cancelPlaceEdit">Cancel</button>
+            </form>
+            <template v-else>
+              <button class="map-place-open" type="button" :title="`Go to ${place.label}`" @click="goToPlace(place)">
+                <strong>{{ place.label }}</strong>
+                <small>{{ formatCoordinates(place) }}</small>
+              </button>
+              <div class="map-place-buttons">
+                <button
+                  class="map-place-action"
+                  type="button"
+                  :title="`Attach ${place.label} to the selected section`"
+                  :disabled="!linkTarget"
+                  @click="attachPlaceToToc(place)"
+                >Link</button>
+                <button class="map-place-action" type="button" :title="`Rename ${place.label}`" @click="startPlaceEdit(place.id)">✎</button>
+                <button class="map-place-action danger" type="button" :title="`Remove ${place.label}`" @click="removePlace(place.id)">×</button>
+              </div>
+            </template>
+          </li>
+        </ul>
+        <p v-else class="map-place-empty">
+          No places yet. Click the map to drop a pin, then save it with a name.
+        </p>
+      </aside>
     </section>
 
     <Teleport to="body">

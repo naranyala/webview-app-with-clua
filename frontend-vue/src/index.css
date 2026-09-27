@@ -1491,12 +1491,162 @@ body [hidden] {
  * its top-left corner, which is exactly what visibleTiles() returns — the
  * projection does the scrolling, not the DOM.
  */
+/*
+ * Toolbar, an options strip, the canvas, and the places sidebar. The sidebar is
+ * a real column rather than an overlay so a place list can be read and scrolled
+ * while the map stays visible beside it.
+ */
 .map-app {
   display: grid;
   height: calc(100vh - 72px);
   min-height: 0;
-  grid-template-rows: 54px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 288px;
+  grid-template-rows: 54px auto minmax(0, 1fr);
   background: #1d1f25;
+}
+/* Collapsed by narrowing the column, never by unmounting: the sidebar keeps its
+   scroll position, and the canvas keeps a measured width, which it needs to
+   have any tiles at all. */
+.map-app.sidebar-closed {
+  grid-template-columns: minmax(0, 1fr) 0;
+}
+.map-toolbar {
+  grid-column: 1 / -1;
+}
+.map-canvas {
+  grid-column: 1;
+}
+.map-sidebar {
+  grid-column: 2;
+  grid-row: 3;
+}
+.map-options {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  border-bottom: 1px solid #2b2f37;
+  background: #1f232a;
+}
+.map-options select {
+  min-width: 0;
+}
+
+.map-tile-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+/* --- the canvas renderer ---------------------------------------------------- */
+/*
+ * The canvas replaces the tile layers entirely. It is sized in device pixels by
+ * the session, so it needs no CSS size of its own beyond filling the pane.
+ */
+.map-surface {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* --- colour filters --------------------------------------------------------- */
+/*
+ * Applied to the canvas wrapper rather than per tile, so the browser filters one
+ * element instead of compositing each image. grayscale/dark are the two that
+ * actually earn their place: they make a bright basemap legible on the app's dark
+ * chrome, and they cost nothing.
+ */
+.map-canvas.filter-grayscale .map-tile-layer,
+.map-canvas.filter-grayscale .map-surface {
+  filter: grayscale(1);
+}
+.map-canvas.filter-dark .map-tile-layer,
+.map-canvas.filter-dark .map-surface {
+  filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.92);
+}
+.map-canvas.filter-sepia .map-tile-layer,
+.map-canvas.filter-sepia .map-surface {
+  filter: sepia(0.6) saturate(1.1);
+}
+.map-canvas.filter-vivid .map-tile-layer,
+.map-canvas.filter-vivid .map-surface {
+  filter: saturate(1.5) contrast(1.12);
+}
+.map-canvas.filter-faded .map-tile-layer,
+.map-canvas.filter-faded .map-surface {
+  filter: saturate(0.55) brightness(1.06) contrast(0.9);
+}
+
+/* --- the tile grid overlay -------------------------------------------------- */
+/*
+ * Drawn as a background rather than an element: it has to stay locked to tile
+ * lines while the layer moves, and the session supplies the cell size and offset
+ * from the same transform the tiles use.
+ */
+.map-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, #ffffff38 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff38 1px, transparent 1px);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* --- saved place markers ---------------------------------------------------- */
+/*
+ * A marker plus its name, because an unlabelled dot in a list of saved places is
+ * not a label. The name is what makes the list and the map the same thing.
+ */
+.map-place-marker {
+  position: absolute;
+  display: grid;
+  width: 13px;
+  height: 13px;
+  margin: -7px 0 0 -7px;
+  place-items: center;
+  border: 2px solid #dfe6ef;
+  border-radius: 50%;
+  background: #4a7fd4;
+  box-shadow: 0 2px 7px #000a;
+  cursor: pointer;
+  z-index: 2;
+}
+.map-place-marker:hover,
+.map-place-marker:focus-visible {
+  border-color: #fff;
+  background: #6ea0e8;
+}
+.map-place-marker-label {
+  position: absolute;
+  bottom: 15px;
+  left: 50%;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #17191ee6;
+  color: #e6e9ee;
+  font-size: 0.66rem;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+.map-cursor-readout {
+  position: absolute;
+  right: 10px;
+  bottom: 26px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: #17191ed9;
+  color: #e6e9ee;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  pointer-events: none;
+  z-index: 2;
 }
 .map-toolbar {
   display: flex;
@@ -1519,22 +1669,49 @@ body [hidden] {
   min-height: 0;
   background: #262b33;
   cursor: grab;
-  /* Stops the browser from panning the whole page on a touch drag. */
+  /* Stops the browser from panning the whole page on a touch drag, and stops a
+     wheel at the edge from chaining to a parent scroller. */
   touch-action: none;
+  overscroll-behavior: contain;
   user-select: none;
 }
-.map-canvas:active {
+.map-canvas.panning {
   cursor: grabbing;
 }
 .map-canvas:focus-visible {
   outline: 2px solid #8ab4f8;
   outline-offset: -2px;
 }
+/*
+ * The tile layer is the whole map. It never changes size, and its transform is
+ * the only thing a pan or a pinch writes, so the compositor does the work and no
+ * tile is laid out again. transform-origin 0 0 is required: the translate in
+ * layerTransform() is solved against that origin.
+ */
+.map-tile-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
 .map-tile {
   position: absolute;
   width: 256px;
   height: 256px;
   pointer-events: none;
+  user-select: none;
+}
+/*
+ * The outgoing set from the last zoom commit, kept underneath the new one for
+ * the moment it takes to fetch. Without it every zoom step flashes the
+ * background between the old scale and the new one.
+ */
+.map-tile-previous {
+  opacity: 0.55;
+  filter: saturate(0.85);
 }
 .map-pin {
   position: absolute;
@@ -1547,6 +1724,7 @@ body [hidden] {
   box-shadow: 0 3px 10px #000a;
   pointer-events: none;
   transform: rotate(-45deg);
+  z-index: 2;
 }
 .map-readout {
   display: flex;
@@ -1559,6 +1737,47 @@ body [hidden] {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.76rem;
   white-space: nowrap;
+}
+/*
+ * A scale bar only means something next to a measured rule, so the bar and its
+ * label are one unit: the rule is the distance, the label names it.
+ */
+.map-scale-bar {
+  position: absolute;
+  bottom: 26px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: #17191ecc;
+  color: #e6e9ee;
+  font-size: 0.68rem;
+  pointer-events: none;
+  z-index: 2;
+}
+.map-scale-rule {
+  display: block;
+  height: 7px;
+  border: 1px solid #e6e9ee;
+  border-top: 0;
+}
+.map-scale-label {
+  white-space: nowrap;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+.map-loading {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: #17191ed9;
+  color: #c8ced8;
+  font-size: 0.7rem;
+  pointer-events: none;
+  z-index: 2;
 }
 /*
  * The tile policy requires visible attribution. It stays legible over any tile
@@ -1629,6 +1848,141 @@ body [hidden] {
   white-space: nowrap;
 }
 
+/* --- the places sidebar ----------------------------------------------------- */
+.map-sidebar {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border-left: 1px solid #30343c;
+  background: #20232a;
+}
+.map-sidebar.closed {
+  visibility: hidden;
+}
+.map-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px 7px;
+  color: #858c98;
+  font-size: 0.7rem;
+  letter-spacing: 0.09em;
+}
+.map-sidebar-heading strong {
+  color: #c8ced8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+}
+.map-sidebar-actions {
+  display: flex;
+  gap: 7px;
+  padding: 0 13px 8px;
+}
+.map-sidebar-actions .toolbar-button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.map-place-status {
+  min-width: 0;
+  padding: 0 13px 8px;
+  color: #858c98;
+  font-size: 0.74rem;
+}
+.map-place-editing-hint,
+.map-place-empty {
+  padding: 0 13px 10px;
+  color: #6b7280;
+  font-size: 0.74rem;
+}
+.map-place-list {
+  display: grid;
+  min-height: 0;
+  gap: 5px;
+  margin: 0;
+  padding: 0 9px 12px;
+  overflow-y: auto;
+  list-style: none;
+}
+.map-place-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid #353a44;
+  border-radius: 7px;
+  background: #22262e;
+}
+.map-place-row.active {
+  border-color: #4a7fd4;
+}
+.map-place-open {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.map-place-open strong {
+  overflow: hidden;
+  color: #d9dde4;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-place-open small {
+  color: #858c98;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+}
+.map-place-buttons {
+  display: flex;
+  gap: 4px;
+}
+.map-place-action {
+  padding: 3px 6px;
+  border: 1px solid #3f4652;
+  border-radius: 5px;
+  background: #262b34;
+  color: #b6bcc6;
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+.map-place-action:hover:not(:disabled) {
+  border-color: #6f8cff;
+  color: #dfe4ec;
+}
+.map-place-action.danger:hover:not(:disabled) {
+  border-color: #a1483f;
+  color: #f0b4ae;
+}
+.map-place-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.map-place-edit {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+}
+.map-place-edit input {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid #3f4652;
+  border-radius: 5px;
+  background: #1b1e24;
+  color: #d9dde4;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
 @media (max-width: 1400px) {
   /* Five 250px cards plus gaps need ~1400px; below that, three per row. */
   .app-grid {
@@ -1638,6 +1992,25 @@ body [hidden] {
 @media (max-width: 1100px) {
   .app-grid {
     grid-template-columns: repeat(2, minmax(0, 330px));
+  }
+}
+@media (max-width: 900px) {
+  /* Below this the sidebar would leave the map too narrow to pan in, so it
+     overlays the canvas instead of taking a column. */
+  .map-app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .map-sidebar {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 280px;
+    box-shadow: -12px 0 28px #0009;
+  }
+  .map-app.sidebar-closed .map-sidebar {
+    display: none;
   }
 }
 @media (max-width: 700px) {

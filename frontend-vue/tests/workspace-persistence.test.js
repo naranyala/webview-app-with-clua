@@ -34,8 +34,22 @@ function fakeSessions() {
     imageDirectoryPath: ref('/photos'),
     imageRecentPaths: ref([]),
     selectedImageGroup: ref('All Images'),
+    mapPlaces: () => [
+      { id: 'p1', label: 'North gate', lat: 51.5, lon: -0.12, createdAt: 1 },
+    ],
+    applyMapPlaces: (next) => {
+      sessionsRestored.places = next;
+    },
+    mapSidebarOpen: ref(true),
+    mapFilter: ref('none'),
+    mapRenderer: ref('dom'),
+    mapShowGrid: ref(false),
+    mapShowCursor: ref(true),
   };
 }
+
+/* Where the persistence engine handed a restored place list back to. */
+const sessionsRestored = { places: [] };
 
 /* A store whose local, native, and report behavior each test controls. */
 function fakeStore({
@@ -130,7 +144,47 @@ describe('the snapshot', () => {
         recentPaths: [],
         selectedGroup: 'All Images',
       },
+      map: {
+        places: [
+          {
+            id: 'p1',
+            label: 'North gate',
+            lat: 51.5,
+            lon: -0.12,
+            createdAt: 1,
+          },
+        ],
+        sidebarOpen: true,
+        filter: 'none',
+        renderer: 'dom',
+        showGrid: false,
+        showCursor: true,
+      },
     });
+  });
+
+  test('remembers the map view options and the saved places', () => {
+    const sessions = fakeSessions();
+    sessions.mapFilter.value = 'dark';
+    sessions.mapRenderer.value = 'canvas';
+    sessions.mapShowGrid.value = true;
+    sessions.mapSidebarOpen.value = false;
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    const snapshot = engine.snapshot();
+
+    assert.equal(snapshot.map.filter, 'dark');
+    assert.equal(snapshot.map.renderer, 'canvas');
+    assert.equal(snapshot.map.showGrid, true);
+    assert.equal(snapshot.map.sidebarOpen, false);
+    assert.equal(snapshot.map.places.length, 1);
+    assert.equal(snapshot.map.places[0].label, 'North gate');
+  });
+
+  test('a workspace from before the Explorer still restores', () => {
+    /* No `map` field at all: the engine must not refuse the whole record. */
+    const engine = build(fakeStore());
+    assert.equal(engine.apply({ ...engine.snapshot(), map: undefined }), true);
   });
 
   test('remembers the paths a viewer has been given', () => {
