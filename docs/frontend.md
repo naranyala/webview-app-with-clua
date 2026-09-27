@@ -1,8 +1,7 @@
 # Frontend guide
 
 The desktop frontend lives in [`frontend-vue/`](../frontend-vue/). It is a Vue 3
-application built with Rsbuild. The former Octane implementation remains in
-`frontend-octane/` for reference but is not loaded by the desktop target.
+application built with Rsbuild.
 
 ## Source layout
 
@@ -12,15 +11,17 @@ frontend-vue/
 ├── src/App.vue                  composition: wiring, watchers, persistence, template
 ├── src/boot-state.js            one-time boot snapshot of the workspace
 ├── src/native-bridge.js         getNativeBinding / runNativeCall
+├── src/file-io.js               text file transfer primitives and name suggestions
+├── src/smoke.js                 desktop smoke checks and the host verdict
+├── src/workspace-persistence.js snapshot, write order, debounce, hydration
 ├── src/workspace-report.js      persistence report -> header sentence
-├── src/editor-session.js        Text Editor buffer, caret, word count
+├── src/editor-session.js        Text Editor buffer, caret, word count, notice
 ├── src/app-shell.js             active view and transition hooks
 ├── src/pdf-session.js           PDF load, render, paging, resume, heading panel
 ├── src/image-session.js         folder selection, grouping, lightbox
 ├── src/toc-outline.js           outline items and cross-tool links
 ├── src/workspace.js             persistent workspace store and outline schema
 ├── src/index.css                workspace layout and visual styling
-├── src/metrics-ui.js            reserved metrics parsing and bridge errors
 ├── public/index.html            Rsbuild HTML template
 ├── rsbuild.config.js            Vue and single-file setup
 ├── plugins/single-file-html.js  removes non-HTML build artifacts
@@ -36,13 +37,16 @@ template. Everything else lives in one module per concern:
 | Module | Owns |
 | --- | --- |
 | `boot-state.js` | the single synchronous `loadWorkspace()` read per launch |
-| `native-bridge.js` | resolving and running a host binding (`getNativeBinding`, `runNativeCall`) |
+| `native-bridge.js` | resolving and running a host binding (`getNativeBinding`, `runNativeCall`), forwarding arguments on both host paths |
 | `workspace-report.js` | turning a `getWorkspaceReport()` record into the header sentence |
-| `editor-session.js` | `editorContent`, the caret readout, and the word counter |
+| `file-io.js` | system-picker-first transfers (`readTextFileNative`, `writeTextFile`), browser fallbacks, `suggestFileName`, and `withFileTransfer` — the one place the success/cancel/error outcomes are handled |
+| `smoke.js` | the `METRICS_SMOKE` checks, their single-line report, and the `smokeVerdict` call; inert without the host marker |
+| `workspace-persistence.js` | the persistence engine: snapshot, `apply`, `persist`, `flush`, `schedule`, `hydrate`, and the mode — every dependency injected |
+| `editor-session.js` | `editorContent`, the caret readout, the word counter, and the transfer notice |
 | `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
 | `pdf-session.js` | document loading, the canvas registry, paging, resume, and the heading panel |
 | `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
-| `toc-outline.js` | outline items, linking to pages and images, and draft sync |
+| `toc-outline.js` | outline items, linking to pages and images, draft sync, and JSON/text import/export |
 
 Dependencies point one way: the modules import `workspace.js` and
 `native-bridge.js`, and `App.vue` imports the modules. A module that needs
@@ -84,13 +88,21 @@ navigating the WebView.
 
 The Text Editor is a plain writing surface:
 
-1. Keeps the cursor position and word count reactive.
-2. Stores its buffer in `editorContent`, not in the metrics pipeline.
-3. Autosaves the buffer into the bound outline item on every input event.
-4. Shows the heading level, item position, and save state in the chrome.
-5. Moves between outline items with `‹ Prev` / `Next ›` and returns to the
+1. Opens only for a picked outline section: with no resolvable active item it
+   shows a section picker (`.toc-pick`) instead of the textarea — pick a
+   declared section to load its draft, or jump to the TOC Manager to declare
+   the first one.
+2. Keeps the cursor position and word count reactive.
+3. Stores its buffer in `editorContent`, not in the metrics pipeline.
+4. Autosaves the buffer into the bound outline item on every input event.
+5. Shows the heading level, item position, and save state in the chrome.
+6. Moves between outline items with `‹ Prev` / `Next ›` and returns to the
    outline with `Outline`.
-6. Runs no metrics: `Run metrics`, the result panel, history, export, the tool
+7. Imports and exports the active draft: `Export…` writes it through the
+   system save dialog (browser fallback: anchor download), `Import…` reads a
+   text file (system open dialog, fallback: hidden input) and replaces the
+   draft, flushing it into the outline item; the footer shows the notice.
+8. Runs no metrics: `Run metrics`, the result panel, history, export, the tool
    rail, and `Ctrl+Enter` were removed.
 
 Both file-facing cards expose exactly one picker control: the toolbar button
@@ -115,7 +127,9 @@ The PDF reader:
 The TOC Manager is the fourth menu card and acts as the first step of the
 writing flow:
 
-1. Declares outline items locally (title plus level 1-3) without a native call.
+1. Declares outline items from an inline create bar (title plus level 1-3)
+   without a native call; the whole manager is one card centered over the
+   viewport.
 2. Persists items and their drafts through the shared workspace store
    (`src/workspace.js`): the native `saveWorkspace` binding writes
    `native-workspace/workspace.json`, `localStorage`
@@ -126,6 +140,18 @@ writing flow:
    buffer back to that item.
 4. Leaving the editor flushes the bound draft, so the outline always shows the
    latest word count and draft state.
+5. Edits title and level inline per row (Save/Cancel, empty titles rejected,
+   levels clamped) without losing the draft, links, id, or position; reorders
+   rows with move up/down buttons; removes a row with an Undo action in the
+   toolbar that stays valid until the next outline mutation.
+6. Shows a title filter once eight or more items exist; while filtering, the
+   reorder buttons are disabled so edits always act on the visible list.
+7. Imports and exports the outline as a versioned JSON file
+   (`{"format":"metrics-toc","version":1,"items":[…]}`): `Export…` saves the
+   whole outline through the system save dialog, `Import…` reads one and
+   appends its sections after the existing items with fresh ids — never
+   replacing what is already declared. Malformed files report through the
+   TOC status line.
 
 ## Workspace integration
 
@@ -173,8 +199,7 @@ The frontend checks these native bindings in order:
 4. `window.__webview__.call` as a compatibility fallback.
 
 The native `summarize` binding is still registered by the C host and covered by
-`make bridge-test`, but the current UI no longer calls it. `src/metrics-ui.js`
-is kept with its tests so the metrics input path can be reintroduced later.
+`make bridge-test`, but the current UI no longer calls it.
 
 ## Changing the frontend
 
@@ -182,8 +207,7 @@ When changing UI behavior or bridge contracts:
 
 1. Update the owning session module, `App.vue` when the wiring changes, and
    `index.css`.
-2. Update `metrics-ui.js` if the reserved metrics helpers change, or
-   `workspace.js` if the persisted schema changes.
+2. Update `workspace.js` if the persisted schema changes.
 3. Update [the bridge protocol](bridge-protocol.md) when native contracts change.
 4. Update Vue tests and static source contracts.
 5. Run `npm run check`, `npm test`, and `npm run build`.

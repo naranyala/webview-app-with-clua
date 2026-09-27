@@ -141,6 +141,9 @@ local function build_c_target(kind, name, sources, output, options)
   for _, library in ipairs(options.libraries or {}) do
     table.insert(parts, library)
   end
+  for _, library in ipairs(options.extra_libraries or {}) do
+    table.insert(parts, library)
+  end
   for _, flag in ipairs(options.flags or {}) do
     table.insert(parts, flag)
   end
@@ -210,42 +213,107 @@ local function build_native()
   })
 end
 
+-- The C test suites, read from tests/MANIFEST so this file, the Makefile, and
+-- CMakeLists.txt cannot drift. Row format: profile | name | source ...
+local function read_test_manifest()
+  local path = root .. "/tests/MANIFEST"
+  local suites = {}
+  local handle = io.open(path, "r")
+  if not handle then
+    fail("Test manifest not found: " .. path)
+  end
+  for line in handle:lines() do
+    line = line:gsub("#.*", "")
+    line = line:gsub("^%s+", ""):gsub("%s+$", "")
+    if line ~= "" then
+      local fields = {}
+      for field in line:gmatch("[^|]+") do
+        table.insert(fields, trim(field))
+      end
+      if #fields < 3 then
+        fail("Malformed manifest row: " .. line)
+      end
+      local sources = {}
+      for source in fields[3]:gmatch("%S+") do
+        table.insert(sources, source)
+      end
+      table.insert(suites, { profile = fields[1], name = fields[2], sources = sources })
+    end
+  end
+  handle:close()
+  return suites
+end
+
+-- profile -> compile flags and libraries. A new profile needs an entry here,
+-- one in tools/tests-manifest.awk, and one in CMakeLists.txt.
+local function test_profile_flags(profile, glib, gtk, stub_dir)
+  if profile == "core" then
+    return { flags = {}, libraries = { "-lm" } }
+  elseif profile == "glib" or profile == "glib-math" then
+    local libraries = {}
+    for _, library in ipairs(glib.libraries) do
+      table.insert(libraries, library)
+    end
+    if profile == "glib-math" then
+      table.insert(libraries, "-lm")
+    end
+    return { flags = glib.flags, libraries = libraries }
+  elseif profile == "gtk-stub" then
+    return { flags = gtk.flags, includes = { stub_dir }, libraries = gtk.libraries }
+  elseif profile == "pdftotext" then
+    return {
+      flags = glib.flags,
+      defines = { [[PDFTOTEXT_EXECUTABLE='"pdftotext"']] },
+      libraries = glib.libraries,
+    }
+  end
+  fail("Unknown test profile: " .. profile)
+end
+
 local function build_c_tests()
-  require_executables({ "cc" })
+  require_executables({ "cc", "awk" })
   build_c_executable("test_metrics", { "src/metrics.c", "tests/test_metrics.c" }, {
     output = root .. "/build/test_metrics",
     libraries = { "-lm" },
   })
-  build_c_executable("test_bridge", { "src/metrics.c", "src/webview_bridge.c", "tests/test_bridge.c" }, {
-    output = root .. "/build/test_bridge",
-    libraries = { "-lm" },
-  })
-  build_c_executable("test_workspace_store", { "src/workspace_store.c", "tests/test_workspace_store.c" }, {
-    output = root .. "/build/test_workspace_store",
-  })
 
-  -- The host-plumbing tests link GTK (app_support.c owns the path chooser)
-  -- and resolve <webview/webview.h> through the test-only stub header.
-  local gtk_cflags = pkg_config("gtk+-3.0", "cflags")
-  local gtk_libs = pkg_config("gtk+-3.0", "libs")
-  if gtk_libs == "" then
+  -- glib is the only dependency of the pure layers and the JSON codec; GTK is
+  -- for the host-plumbing suites, which resolve <webview/webview.h> through
+  -- the test-only stub header.
+  local glib = {
+    flags = flag_list(pkg_config("glib-2.0", "cflags")),
+    libraries = flag_list(pkg_config("glib-2.0", "libs")),
+  }
+  if #glib.libraries == 0 then
+    fail("GLib development package not found: pkg-config glib-2.0")
+  end
+  local gtk = {
+    flags = flag_list(pkg_config("gtk+-3.0", "cflags")),
+    libraries = flag_list(pkg_config("gtk+-3.0", "libs")),
+  }
+  if #gtk.libraries == 0 then
     fail("GTK 3 development package not found: pkg-config gtk+-3.0")
   end
-  local host_flags = flag_list(gtk_cflags)
-  local host_libraries = flag_list(gtk_libs)
-  build_c_executable("test_app_support", { "src/app_support.c", "tests/test_app_support.c" }, {
-    output = root .. "/build/test_app_support",
-    includes = { root .. "/tests/stubs" },
-    flags = host_flags,
-    libraries = host_libraries,
-  })
-  build_c_executable("test_pdf_toc", { "src/pdf_toc.c", "src/app_support.c", "tests/test_pdf_toc.c" }, {
-    output = root .. "/build/test_pdf_toc",
-    includes = { root .. "/tests/stubs" },
-    defines = { [[PDFTOTEXT_EXECUTABLE='"pdftotext"']] },
-    flags = host_flags,
-    libraries = host_libraries,
-  })
+  local stub_dir = root .. "/tests/stubs"
+
+  for _, suite in ipairs(read_test_manifest()) do
+    if suite.name ~= "metrics" then
+      local profile = test_profile_flags(suite.profile, glib, gtk, stub_dir)
+      build_c_executable("test_" .. suite.name, suite.sources, {
+        output = root .. "/build/test_" .. suite.name,
+        includes = profile.includes,
+        defines = profile.defines,
+        flags = profile.flags,
+        libraries = profile.libraries,
+      })
+    end
+  end
+end
+
+local function run_c_tests()
+  for _, suite in ipairs(read_test_manifest()) do
+    run("./build/test_" .. suite.name, root)
+  end
 end
 
 local function build_all()
@@ -264,11 +332,7 @@ end
 local function test_native()
   build_c_tests()
   require_executables({ "pdftotext" })
-  run("./build/test_metrics", root)
-  run("./build/test_bridge", root)
-  run("./build/test_workspace_store", root)
-  run("./build/test_app_support", root)
-  run("./build/test_pdf_toc", root)
+  run_c_tests()
   require_executables({ "make" })
   run(make_command("lua-test"), root)
   run(make_command("sanitized-test"), root)
@@ -277,6 +341,14 @@ end
 local function test_all()
   test_frontend()
   test_native()
+end
+
+-- The GUI smoke run needs a graphical session, so it is never part of
+-- test_all(): scripts/smoke.sh drives both render modes and needs a display.
+local function smoke()
+  build_all()
+  require_executables({ "bash" })
+  run("./scripts/smoke.sh", root)
 end
 
 local function run_desktop()
@@ -325,6 +397,7 @@ local commands = {
   test = test_all,
   ["test-frontend"] = test_frontend,
   ["test-native"] = test_native,
+  smoke = smoke,
   doctor = doctor,
   clean = function()
     clean(false)
@@ -342,7 +415,7 @@ local commands = {
 local command_name = arg[1] or "run"
 if command_name == "help" or command_name == "--help" or command_name == "-h" then
   print("Usage: lua build.lua <command>")
-  print("Commands: all, build, desktop, native, c-tests, frontend, test, test-frontend, test-native, doctor, clean, distclean, rebuild, run, help")
+  print("Commands: all, build, desktop, native, c-tests, frontend, test, test-frontend, test-native, smoke, doctor, clean, distclean, rebuild, run, help")
   os.exit(0)
 end
 local command = commands[command_name]

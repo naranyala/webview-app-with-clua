@@ -42,6 +42,9 @@ typedef enum {
 /* Schedules a function on the run/event loop of the host. */
 webview_error_t webview_dispatch(webview_t w, void (*fn)(webview_t w, void *arg), void *arg);
 
+/* Stops the run loop so the host can exit on its own. */
+webview_error_t webview_terminate(webview_t w);
+
 /* Returns the native handle of the requested kind, or NULL. */
 void *webview_get_native_handle(webview_t w, webview_native_handle_kind_t kind);
 

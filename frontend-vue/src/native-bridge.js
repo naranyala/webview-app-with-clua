@@ -7,12 +7,16 @@
  * falls back to the browser file input when no host is present.
  */
 
-/* Returns a zero-argument function for the binding, or null outside the host. */
+/*
+ * Returns a function for the binding, or null outside the host. Arguments
+ * are forwarded verbatim on both paths, so parameterized bindings
+ * (saveTextFile) and plain ones (openPdf) are called the same way.
+ */
 export function getNativeBinding(name) {
   const binding = window[name];
-  if (typeof binding === 'function') return () => binding();
+  if (typeof binding === 'function') return (...args) => binding(...args);
   if (window.__webview__ && typeof window.__webview__.call === 'function') {
-    return () => window.__webview__.call(name);
+    return (...args) => window.__webview__.call(name, ...args);
   }
   return null;
 }

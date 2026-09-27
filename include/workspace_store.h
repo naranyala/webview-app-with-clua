@@ -41,8 +41,10 @@ char *workspace_store_load(const char *path, size_t *length_out,
                            workspace_store_result *result);
 
 /*
- * Replaces path with data using a temporary file in the same directory and an
- * atomic rename, so an interrupted write cannot corrupt existing state.
+ * Replaces path with data using a temporary file in the same directory, an
+ * fsync of that file, an atomic rename, and an fsync of the directory, so
+ * neither an interrupted write nor a crash right after it can leave a
+ * truncated or missing store.
  */
 workspace_store_result workspace_store_save(const char *path, const char *data,
                                             size_t length);

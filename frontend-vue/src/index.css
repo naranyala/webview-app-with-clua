@@ -223,6 +223,18 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#editor-notice {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: #858c98;
+}
+#editor-notice.error {
+  color: #f2a6a6;
+}
 #values {
   display: block;
   width: min(100%, 780px);
@@ -247,8 +259,121 @@ button {
 #values::selection {
   background: #405477;
 }
+/* --- Editor gate: pick an outline section before writing ------------------ */
+
+.toc-pick {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+  place-items: center;
+  padding: clamp(20px, 5vh, 48px) 20px;
+}
+.toc-pick-card {
+  display: grid;
+  width: min(100%, 540px);
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid #353a44;
+  border-radius: 10px;
+  background: #22262e;
+  box-shadow: 0 12px 32px #0b0c0f40;
+}
+.toc-pick-eyebrow {
+  color: #8ab4f8;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-pick-card h2 {
+  margin: 0;
+  color: #f0f2f5;
+  font-size: 1.15rem;
+}
+.toc-pick-hint {
+  margin: 0;
+  color: #858c98;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+.toc-pick-list {
+  display: grid;
+  max-height: min(46vh, 340px);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.toc-pick-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #353a44;
+  border-radius: 8px;
+  background: #1c2027;
+  color: #d9dde4;
+  text-align: left;
+  cursor: pointer;
+}
+.toc-pick-item:hover,
+.toc-pick-item:focus-visible {
+  border-color: #6f8fbe;
+  background: #272d37;
+}
+.toc-pick-item:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+}
+.toc-pick-level {
+  padding: 3px 7px;
+  border: 1px solid #4a5162;
+  border-radius: 5px;
+  color: #aab3c2;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.toc-pick-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.toc-pick-copy strong {
+  overflow: hidden;
+  color: #f0f2f5;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toc-pick-copy small {
+  color: #858c98;
+  font-size: 0.72rem;
+}
+.toc-pick-empty {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 14px;
+  border: 1px dashed #3b414c;
+  border-radius: 8px;
+  text-align: center;
+}
+.toc-pick-empty h3 {
+  margin: 0;
+  color: #c8cdd5;
+  font-size: 0.9rem;
+}
+.toc-pick-empty p {
+  margin: 0;
+  color: #6f7683;
+  font-size: 0.75rem;
+}
 .toolbar-button:focus-visible,
-.toc-outline-remove:focus-visible {
+.toc-outline-remove:focus-visible,
+.toc-outline-move:focus-visible,
+.toc-outline-edit:focus-visible {
   outline: 2px solid #8ab4f8;
   outline-offset: 2px;
 }
@@ -479,51 +604,49 @@ button {
 }
 .toc-manager-body {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 18px;
   min-height: 0;
   padding: 20px;
 }
-.toc-declare,
 .toc-outline {
   display: grid;
+  width: min(100%, 940px);
   gap: 12px;
+  margin-inline: auto;
   padding: 18px;
   border: 1px solid #353a44;
   border-radius: 10px;
   background: #22262e;
   box-shadow: 0 12px 32px #0b0c0f40;
 }
-.toc-declare-heading,
 .toc-outline-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
-.toc-declare-heading span,
 .toc-outline-heading span:first-child {
   color: #7f8794;
   font-size: 0.67rem;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
-.toc-declare-heading strong {
-  color: #c8cdd5;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
 .toc-outline-heading span:last-child {
   color: #667080;
   font-size: 0.72rem;
 }
-.toc-declare label {
-  color: #858c98;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
+/* --- TOC management surface: create bar, filter, inline edit --------------- */
+
+.toc-declare-bar {
+  display: flex;
+  gap: 8px;
 }
-.toc-declare input,
+.toc-declare-bar input,
+.toc-filter input,
+.toc-edit input,
+.toc-edit select,
 .toc-link-panel select,
 .lightbox-attach select {
   width: 100%;
@@ -535,18 +658,64 @@ button {
   color: #e5e9ef;
   font-size: 0.85rem;
 }
-.toc-declare input:focus,
-.toc-declare select:focus {
+.toc-declare-bar input {
+  flex: 1;
+  min-width: 0;
+}
+.toc-declare-bar select {
+  flex-shrink: 0;
+  width: auto;
+}
+.toc-declare-bar input:focus,
+.toc-filter input:focus,
+.toc-edit input:focus,
+.toc-edit select:focus {
   border-color: #8ab4f8;
 }
-.toc-declare .toolbar-button.primary {
-  justify-self: start;
+.toc-declare-bar .toolbar-button {
+  flex-shrink: 0;
 }
-.toc-declare-hint {
+.toc-bar-hint {
   margin: 0;
   color: #6f7683;
   font-size: 0.72rem;
   line-height: 1.55;
+}
+.toc-filter input {
+  width: 100%;
+}
+.toc-edit {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.toc-edit input {
+  flex: 1;
+  min-width: 160px;
+}
+.toc-edit select {
+  flex-shrink: 0;
+  width: auto;
+}
+.toc-outline-no-match {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px dashed #3b414c;
+  border-radius: 8px;
+  text-align: center;
+}
+.toc-outline-no-match p {
+  margin: 0;
+  color: #858c98;
+  font-size: 0.8rem;
+}
+.toc-undo {
+  color: #8ab4f8;
 }
 .toc-outline {
   gap: 14px;
@@ -620,7 +789,9 @@ button {
 }
 .toc-outline-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 .toc-outline-link {
@@ -659,6 +830,29 @@ button {
 .toc-outline-remove:hover {
   background: #303846;
   color: #f2a6a6;
+}
+.toc-outline-move,
+.toc-outline-edit {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: transparent;
+  color: #7f8794;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.toc-outline-move:hover,
+.toc-outline-edit:hover {
+  background: #303846;
+  color: #b9d3ff;
+}
+.toc-outline-move:disabled {
+  background: transparent;
+  color: #7f8794;
+  opacity: 0.35;
+  cursor: default;
 }
 .toc-outline-empty {
   display: grid;

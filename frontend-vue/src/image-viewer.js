@@ -36,8 +36,15 @@ export const IMAGE_MIME_TYPES = {
   '.webp': 'image/webp',
 };
 
+/*
+ * The same three budgets the native directory scan enforces
+ * (image_directory.c: IMAGE_SCAN_MAX_FILES / _MAX_FILE_SIZE / _MAX_TOTAL_SIZE).
+ * Without the total one, 500 files of 16 MB each became ~8 GB of base64 data
+ * URLs in the browser fallback.
+ */
 export const MAX_BROWSER_IMAGES = 500;
 export const MAX_BROWSER_IMAGE_SIZE = 16 * 1024 * 1024;
+export const MAX_BROWSER_TOTAL_SIZE = 96 * 1024 * 1024;
 
 export function imageExtension(path) {
   const normalized = String(path || '').toLowerCase();
@@ -94,7 +101,20 @@ export async function imagesFromFileList(fileList) {
   const acceptable = files.filter(
     (file) => file.size <= MAX_BROWSER_IMAGE_SIZE,
   );
-  const selected = acceptable.slice(0, MAX_BROWSER_IMAGES);
+  /*
+   * Take files while both the count and the running byte total fit, which is
+   * how the native scan stops. accepted[] and total let the caller say how
+   * many were dropped instead of silently truncating.
+   */
+  const accepted = [];
+  let total = 0;
+  for (const file of acceptable) {
+    if (accepted.length >= MAX_BROWSER_IMAGES) break;
+    if (total + file.size > MAX_BROWSER_TOTAL_SIZE) break;
+    accepted.push(file);
+    total += file.size;
+  }
+  const selected = accepted;
   const images = await Promise.all(
     selected.map(async (file) => {
       const dataUrl = await readFileAsDataUrl(file);
@@ -117,6 +137,8 @@ export async function imagesFromFileList(fileList) {
   return {
     images,
     groups: groupImages(images),
+    totalBytes: total,
+    // Everything acceptable that the count or byte budget refused.
     skipped: Math.max(0, acceptable.length - selected.length),
     oversized: files.length - acceptable.length,
   };

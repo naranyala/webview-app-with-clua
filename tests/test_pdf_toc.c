@@ -5,13 +5,13 @@
  * Extraction spawns pdftotext for real, so the tests need it on PATH (the
  * Makefile checks). Fixtures are generated into build/pdf-toc-test and the
  * XDG data directory is redirected there so the cache never touches the real
- * user home. app_support.c is linked only for append_json_string(); its
- * webview calls are stubbed below.
+ * user home. json_io.c is linked only for json_append_string(), which needs
+ * no webview, so this suite runs with no GUI and no stub header.
  */
 
 #include "pdf_toc.h"
 
-#include "app_support.h"
+#include "json_io.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -20,31 +20,6 @@
 
 #define TEST_DIRECTORY "build/pdf-toc-test"
 #define CACHE_SUBDIRECTORY "native-workspace/pdf-toc"
-
-/* --- webview stubs (app_support.c is linked for append_json_string) ----- */
-
-webview_error_t webview_return(webview_t view, const char *id, int status, const char *result) {
-    (void)view;
-    (void)id;
-    (void)status;
-    (void)result;
-    return WEBVIEW_ERROR_OK;
-}
-
-webview_error_t webview_dispatch(webview_t view, void (*fn)(webview_t, void *), void *argument) {
-    (void)view;
-    (void)fn;
-    (void)argument;
-    return WEBVIEW_ERROR_OK;
-}
-
-void *webview_get_native_handle(webview_t view, webview_native_handle_kind_t kind) {
-    (void)view;
-    (void)kind;
-    return NULL;
-}
-
-/* --- helpers ------------------------------------------------------------ */
 
 static void assert_string_equals(const char *actual, const char *expected) {
     assert(actual != NULL);
@@ -256,7 +231,32 @@ static void test_build_toc_response(void) {
     pdf_toc_clear(&toc);
 }
 
+/*
+ * The title cap is a character cap, not a byte cap: a 180-character Cyrillic
+ * or CJK heading must survive, which it did not when the extractor compared
+ * GString.len (bytes) against 180.
+ */
+static void test_title_cap_counts_characters(void) {
+    char ascii_title[256];
+    char wide_title[3 * 180 + 1];
+    size_t index;
+
+    for (index = 0; index + 1 < sizeof(ascii_title) && index < 180; index++) ascii_title[index] = 'a';
+    ascii_title[index] = '\0';
+    assert(pdf_toc_count_characters(ascii_title) == 180);
+
+    /* 180 three-byte characters: 540 bytes, still 180 characters. */
+    for (index = 0; index + 3 < sizeof(wide_title); index += 3) {
+        memcpy(wide_title + index, "\xe6\x97\xa5", 3);
+    }
+    memcpy(wide_title + index, "\0", 1);
+    assert(strlen(wide_title) == 540);
+    assert(pdf_toc_count_characters(wide_title) == 180);
+    assert(pdf_toc_count_characters(wide_title) <= 180);
+}
+
 int main(void) {
+    test_title_cap_counts_characters();
     /* Redirect the cache root to an absolute path before glib reads it. */
     char *current = g_get_current_dir();
     char *data_home = g_build_filename(current, TEST_DIRECTORY, NULL);

@@ -6,6 +6,8 @@
 
 #include "image_directory.h"
 
+#include "json_io.h"
+
 #include <gio/gio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,9 +93,9 @@ static void scan_image_directory(const char *directory, const char *relative, in
                 if (encoded != NULL) {
                     if (result->count > 0) g_string_append_c(result->json, ',');
                     g_string_append(result->json, "{\"name\":");
-                    append_json_string(result->json, entry);
+                    json_append_string(result->json, entry);
                     g_string_append(result->json, ",\"relativePath\":");
-                    append_json_string(result->json, relative_path);
+                    json_append_string(result->json, relative_path);
                     g_string_append_printf(result->json, ",\"size\":%lld,\"dataUrl\":\"data:%s;base64,%s\"}", size, mime, encoded);
                     result->count++;
                     result->total_size += size;
@@ -120,7 +122,7 @@ static void scan_image_directory(const char *directory, const char *relative, in
  */
 static void show_image_directory_picker(webview_t view, void *argument) {
     picker_request *request = argument;
-    char *selected_path = run_path_chooser(view, PICKER_SELECT_FOLDER, "Choose Image Directory", NULL);
+    char *selected_path = run_path_chooser(view, PICKER_SELECT_FOLDER, "Choose Image Directory", NULL, NULL);
     if (selected_path == NULL) {
         webview_return(view, request->request_id, 0, "{\"canceled\":true}");
         goto cleanup;
@@ -131,7 +133,7 @@ static void show_image_directory_picker(webview_t view, void *argument) {
     char *directory_name = g_path_get_basename(selected_path);
     g_string_append_c(scan.json, ']');
     g_string_append(scan.json, ",\"name\":");
-    append_json_string(scan.json, directory_name);
+    json_append_string(scan.json, directory_name);
     g_string_append_printf(scan.json, ",\"limited\":%s}", scan.limited ? "true" : "false");
     if (scan.count == 0) {
         return_native_error(view, request->request_id, "NO_IMAGES", "No supported images were found within the directory limits.");
@@ -143,8 +145,7 @@ static void show_image_directory_picker(webview_t view, void *argument) {
 
 cleanup:
     g_free(selected_path);
-    g_free(request->request_id);
-    g_free(request);
+    picker_request_release(request);
 }
 
 void on_open_image_directory(const char *id, const char *request, void *argument) {

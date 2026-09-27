@@ -11,11 +11,13 @@
 
 #include "webview_bridge.h"
 
+#include "json_io.h"
 #include "metrics.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const char *skip_space(const char *cursor) {
     while (isspace((unsigned char)*cursor)) cursor++;
@@ -29,14 +31,23 @@ static int has_newline(const char *from, const char *to) {
     return 0;
 }
 
+/*
+ * Writes the shared error shape into a fixed buffer. json_io.c owns the JSON,
+ * so the only thing left to check here is whether it fits the caller's buffer.
+ */
 static int write_error(char *response, size_t response_size, const char *code, const char *message) {
-    int written = snprintf(response, response_size,
-                            "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
-                            code, message);
-    if (written < 0 || (size_t)written >= response_size) {
-        if (response_size > 0) response[0] = '\0';
+    GString *document = g_string_new(NULL);
+    gsize length;
+
+    json_append_error(document, code, message);
+    length = document->len;
+    if (response == NULL || response_size == 0 || length >= response_size) {
+        if (response != NULL && response_size > 0) response[0] = '\0';
+        g_string_free(document, TRUE);
         return 0;
     }
+    memcpy(response, document->str, length + 1);
+    g_string_free(document, TRUE);
     return 1;
 }
 

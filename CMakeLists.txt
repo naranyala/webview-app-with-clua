@@ -24,15 +24,77 @@ FetchContent_MakeAvailable(webview)
 
 add_executable(metrics_desktop
   src/webview_app.c
+  src/json_io.c
   src/app_support.c
   src/pdf_toc.c
   src/pdf_session.c
   src/image_directory.c
+  src/smoke.c
   src/workspace_bindings.c
+  src/text_transfer.c
   src/webview_bridge.c
   src/workspace_store.c
   src/metrics.c
 )
+
+# --- C test suites -----------------------------------------------------------
+#
+# Read from tests/MANIFEST, the same file the Makefile and build.lua read, so
+# `ctest` and `make test` run the same set. Add a suite in one place.
+#
+# profile -> flags. A new profile needs an entry here, one in
+# tools/tests-manifest.awk, and one in build.lua's test_profile_flags.
+include(CTest)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/tests/MANIFEST" manifest_lines)
+pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+set(CMAKE_PROFILE_core "")
+set(CMAKE_PROFILE_glib "PkgConfig::GLIB")
+set(CMAKE_PROFILE_glib-math "PkgConfig::GLIB")
+set(CMAKE_PROFILE_gtk-stub "PkgConfig::GTK")
+set(CMAKE_PROFILE_pdftotext "PkgConfig::GLIB")
+
+foreach (line IN LISTS manifest_lines)
+  string(REGEX REPLACE "#.*" "" line "${line}")
+  string(STRIP "${line}" line)
+  if (NOT "${line}" STREQUAL "")
+    # Strip the padding around the pipes before splitting, so a field is never
+    # " core" and a target is never named "test_ core".
+    string(REGEX REPLACE "[ \t]*\\|[ \t]*" "|" line "${line}")
+    string(REPLACE "|" ";" fields "${line}")
+    list(LENGTH fields field_count)
+    if (field_count LESS 3)
+      continue()
+    endif()
+    list(GET fields 0 profile)
+    list(GET fields 1 suite)
+    list(LENGTH fields field_count)
+    # The third field is a space-separated source list, so split it too.
+    set(sources "")
+    math(EXPR last "${field_count} - 1")
+    foreach (index RANGE 2 ${last})
+      list(GET fields ${index} group)
+      string(REPLACE " " ";" group "${group}")
+      list(APPEND sources ${group})
+    endforeach()
+
+    set(target "test_${suite}")
+    add_executable(${target} ${sources})
+    target_include_directories(${target} PRIVATE include)
+    target_link_libraries(${target} PRIVATE ${CMAKE_PROFILE_${profile}})
+    if (profile STREQUAL "core")
+      target_link_libraries(${target} PRIVATE m)
+    endif()
+    if (profile STREQUAL "pdftotext")
+      target_compile_definitions(${target} PRIVATE PDFTOTEXT_EXECUTABLE="pdftotext")
+    endif()
+    if (profile STREQUAL "gtk-stub")
+      target_include_directories(${target} PRIVATE tests/stubs)
+    endif()
+    # The suites write fixtures under build/<suite>-test, so they must run from
+    # the source root exactly as they do under make and build.lua.
+    add_test(NAME ${suite} COMMAND ${target} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+endforeach()
 
 target_include_directories(metrics_desktop PRIVATE include)
 target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK)
@@ -42,7 +104,6 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/src/index.js"
   "${FRONTEND_DIR}/src/App.vue"
   "${FRONTEND_DIR}/src/index.css"
-  "${FRONTEND_DIR}/src/metrics-ui.js"
   "${FRONTEND_DIR}/src/image-viewer.js"
   "${FRONTEND_DIR}/src/pdf-compat.js"
   "${FRONTEND_DIR}/src/workspace.js"
@@ -57,7 +118,6 @@ set(FRONTEND_SOURCES
   "${FRONTEND_DIR}/public/index.html"
   "${FRONTEND_DIR}/rsbuild.config.js"
   "${FRONTEND_DIR}/plugins/single-file-html.js"
-  "${FRONTEND_DIR}/tests/metrics-ui.test.js"
   "${FRONTEND_DIR}/tests/image-viewer.test.js"
   "${FRONTEND_DIR}/tests/static-shell.test.js"
   "${FRONTEND_DIR}/tests/workspace.test.js"

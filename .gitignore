@@ -5,12 +5,6 @@
 /CMakeUserPresets.json
 
 # Frontend build output and dependencies
-/frontend-octane/dist/
-/frontend-octane/node_modules/
-/frontend-octane/.cache/
-/frontend-octane/.rsbuild-cache/
-/frontend-octane/.turbo/
-
 /frontend-vue/dist/
 /frontend-vue/node_modules/
 /frontend-vue/.rsbuild-cache/

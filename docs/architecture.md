@@ -48,7 +48,8 @@ responsibility:
 | File | Layer |
 | --- | --- |
 | [`src/webview_app.c`](../src/webview_app.c) | entry point: creates the WebView, registers bindings, chooses the render mode |
-| [`src/app_support.c`](../src/app_support.c) | shared plumbing: JSON escaping, error replies, `file://` URLs, GTK path chooser |
+| [`src/json_io.c`](../src/json_io.c) | the single JSON writer and binding-request reader; no webview, no GTK |
+| [`src/app_support.c`](../src/app_support.c) | shared plumbing: error replies, `file://` URLs, picker dispatch, GTK path chooser |
 | [`src/pdf_toc.c`](../src/pdf_toc.c) | pure PDF heading extraction, per-document cache, JSON serialization |
 | [`src/pdf_session.c`](../src/pdf_session.c) | `openPdf` / `extractPdfToc` bindings and the extraction thread |
 | [`src/image_directory.c`](../src/image_directory.c) | `openImageDirectory` binding and the bounded directory scan |

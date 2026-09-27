@@ -26,8 +26,12 @@ const readAll = (directory, extension) =>
  */
 const shellModules = [
   '../src/app-shell.js',
+  '../src/components/LightboxDialog.vue',
+  '../src/components/MenuView.vue',
+  '../src/components/StatusLine.vue',
   '../src/boot-state.js',
   '../src/editor-session.js',
+  '../src/file-io.js',
   '../src/image-session.js',
   '../src/native-bridge.js',
   '../src/pdf-session.js',
@@ -40,6 +44,8 @@ const component = [read('../src/App.vue'), ...shellModules.map(read)].join(
 const template = read('../public/index.html');
 const config = read('../rsbuild.config.js');
 const store = read('../src/workspace.js');
+/* The persistence engine, whose behaviour tests/workspace-persistence.test.js owns. */
+const persistence = read('../src/workspace-persistence.js');
 const styles = read('../src/index.css');
 const nativeHost = `${readAll('../../src', '.c')}\n${readAll(
   '../../include',
@@ -73,7 +79,7 @@ test('Vue app exposes the complete workspace UI and native contracts', () => {
 
 test('Vue app uses reactive view state and native Vue event bindings', () => {
   for (const text of [
-    'const view = ref(restoredWorkspace.view)',
+    'const view = ref(boot.view)',
     'view.value = nextView',
     'v-show="view === \'menu\'"',
     'v-show="view === \'editor\'"',
@@ -84,10 +90,12 @@ test('Vue app uses reactive view state and native Vue event bindings', () => {
     "'image-active': view === 'images'",
     'pdf-content',
     'toc-panel',
-    '@click="selectView(\'editor\')"',
-    '@click="selectView(\'pdf\')"',
-    '@click="selectView(\'images\')"',
-    '@click="selectView(\'toc\')"',
+    // The menu routes through MenuView's emit; App.vue owns the handler.
+    "emit('select', 'editor')",
+    "emit('select', 'pdf')",
+    "emit('select', 'images')",
+    "emit('select', 'toc')",
+    '@select="selectView"',
   ]) {
     assert.match(component, new RegExp(escapePattern(text)));
   }
@@ -105,6 +113,46 @@ test('TOC Manager declares outline items and binds editor drafts', () => {
     'id="toc-title-input"',
   ]) {
     assert.match(component, new RegExp(escapePattern(text)));
+  }
+});
+
+test('TOC Manager manages the outline from one surface', () => {
+  for (const text of [
+    'class="toc-declare-bar"',
+    'Add section',
+    'id="toc-filter-input"',
+    'showTocFilter',
+    'filteredTocItems',
+    'editingTocId === item.id',
+    'id="toc-edit-input"',
+    'startTocEdit(item)',
+    'saveTocEdit(item)',
+    'cancelTocEdit',
+    'moveTocItem(item, -1)',
+    'moveTocItem(item, 1)',
+    'Clear the filter to reorder',
+    'id="toc-undo-remove"',
+    'undoTocRemoval',
+    'lastRemoved',
+    'toc-outline-no-match',
+    'function saveTocEdit',
+    'function startTocEdit',
+    'function moveTocItem',
+    'function undoTocRemoval',
+    'const filteredTocItems',
+    'const lastRemoved',
+  ]) {
+    assert.match(component, new RegExp(escapePattern(text)));
+  }
+  assert.doesNotMatch(component, /class="toc-declare"/);
+  for (const text of [
+    '.toc-declare-bar',
+    '.toc-edit',
+    '.toc-outline-move',
+    '.toc-outline-no-match',
+    '.toc-undo',
+  ]) {
+    assert.match(styles, new RegExp(escapePattern(text)));
   }
 });
 
@@ -143,14 +191,10 @@ test('Workspace state survives a restart through the native host', () => {
   }
   for (const text of [
     'hydrateNativeWorkspace',
-    'applyWorkspace(snapshot)',
-    'loadWorkspaceNative()',
-    'saveWorkspaceNative(serialized)',
+    'createWorkspacePersistence(',
     'persistenceMode',
-    'saved to disk',
     'visibilitychange',
     'beforeunload',
-    'snapshot.savedAt < restoredWorkspace.savedAt',
   ]) {
     assert.match(component, new RegExp(escapePattern(text)));
   }
@@ -230,6 +274,31 @@ test('Text editor is a plain writing surface bound to the outline', () => {
   }
 });
 
+test('Opening the text editor requires a picked outline section', () => {
+  for (const text of [
+    'v-if="!activeTocItem"',
+    'class="toc-pick"',
+    'aria-label="Pick a section to write"',
+    'What are you writing?',
+    'class="toc-pick-item"',
+    ':data-pick-id="item.id"',
+    'selectTocItem(item)',
+    'class="toc-pick-empty"',
+    'No sections yet',
+    'id="declare-first-section"',
+    'goDeclareSection',
+    "'No section selected'",
+    "'Pick a section to start writing'",
+    '<template v-else>',
+  ]) {
+    assert.match(component, new RegExp(escapePattern(text)));
+  }
+  for (const text of ['.toc-pick-card', '.toc-pick-item', '.toc-pick-empty']) {
+    assert.match(styles, new RegExp(escapePattern(text)));
+  }
+  assert.doesNotMatch(component, /'untitled\.txt'/);
+});
+
 test('WebView template renders before Vue starts', () => {
   assert.match(template, /class="app-grid"/);
   assert.match(template, /data-app="editor"/);
@@ -279,9 +348,9 @@ test('Long state text never escapes its menu, toolbar, or sidebar', () => {
     ':title="pdfBadge"',
     ':title="imagesBadge"',
     ':title="outlineBadge"',
-    ':title="pdfStatus"',
-    ':title="imageStatus"',
-    ':title="tocStatus"',
+    ':message="pdfStatus"',
+    ':message="imageStatus"',
+    ':message="tocStatus"',
     ':title="group.name"',
   ]) {
     assert.ok(component.includes(text), `missing ${text}`);
@@ -316,12 +385,12 @@ test('Each viewer exposes one picker sharing one native call path', () => {
   for (const text of [
     'function getNativeBinding(',
     'async function runNativeCall(',
-    "getNativeBinding('openPdf')",
-    "getNativeBinding('openImageDirectory')",
-    "getNativeBinding('extractPdfToc')",
-    'runNativeCall(openPdfFile)',
-    'runNativeCall(openDirectory)',
-    'runNativeCall(extractToc)',
+    "native('openPdf')",
+    "native('openImageDirectory')",
+    "native('extractPdfToc')",
+    'call(openPdfFile)',
+    'call(openDirectory)',
+    'call(extractToc)',
     'id="browse-pdf"',
     'id="browse-image-directory"',
   ]) {
@@ -349,11 +418,20 @@ test('Workspace persistence failures surface as a visible report', () => {
     'id="workspace-report"',
     'id="dismiss-workspace-report"',
     'class="workspace-report"',
-    'refreshWorkspaceReport',
+    'createWorkspacePersistence(',
     'getWorkspaceReport',
-    'workspaceReport.value',
+    'workspaceReport',
   ]) {
     assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'store.loadWorkspaceNative()',
+    'store.saveWorkspaceNative(serialized)',
+    'restored.savedAt < bootSavedAt',
+    'store.hasUserInteracted()',
+    'function hydrate()',
+  ]) {
+    assert.ok(persistence.includes(text), `missing ${text}`);
   }
   for (const text of [
     'export function getWorkspaceReport',
@@ -397,14 +475,17 @@ test('Leaving the editor syncs the draft and the outline can force a save', () =
 
 test('A dismissed report stays away until persistence fails again', () => {
   for (const text of [
-    'refreshWorkspaceReport();',
-    'function refreshWorkspaceReport()',
-    'workspaceReport.value = formatWorkspaceReport(getWorkspaceReport())',
+    'workspaceReport = null',
     '@click="workspaceReport = null"',
     'v-if="workspaceReport"',
     'v-else',
   ]) {
     assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'workspaceReport.value = report(store.getWorkspaceReport())',
+  ]) {
+    assert.ok(persistence.includes(text), `missing ${text}`);
   }
   for (const text of [
     'export function getWorkspaceReport',
@@ -456,4 +537,106 @@ test('Every source and test file opens with a documentation comment', () => {
       );
     }
   }
+});
+
+test('Import and export actions are wired for the outline and the draft', () => {
+  for (const text of [
+    'id="toc-import-json"',
+    'id="toc-export-json"',
+    '@click="importTocFromFile"',
+    '@click="exportTocToFile"',
+    ':disabled="tocItems.length === 0"',
+    'id="toc-import-input"',
+    'ref="tocImportInput"',
+    'accept=".json,application/json"',
+    '@change="handleTocImportFile"',
+    'id="editor-import-file"',
+    'id="editor-export-file"',
+    '@click="importActiveDraftFromFile"',
+    '@click="exportActiveDraftToFile"',
+    ':disabled="!editorContent.trim()"',
+    'id="editor-import-input"',
+    'ref="editorImportInput"',
+    'accept=".txt,.md,.markdown,text/plain,text/markdown"',
+    '@change="handleEditorImportFile"',
+    'id="editor-notice"',
+    "from './file-io.js'",
+    'readTextFileNative',
+    'readFileAsText',
+    'writeTextFile',
+    'suggestFileName',
+    "format: 'metrics-toc'",
+    'applyDraftImport',
+    'Draft replaced by',
+  ]) {
+    assert.match(component, new RegExp(escapePattern(text)));
+  }
+  for (const text of ['#editor-notice', '#editor-notice.error']) {
+    assert.match(styles, new RegExp(escapePattern(text)));
+  }
+  for (const text of [
+    'bind openTextFile',
+    'bind saveTextFile',
+    'on_open_text_file',
+    'on_save_text_file',
+    'PICKER_SAVE_FILE',
+    'TEXT_TRANSFER_MAX_BYTES',
+    'do_overwrite_confirmation',
+  ]) {
+    assert.match(nativeHost, new RegExp(escapePattern(text)));
+  }
+});
+
+/*
+ * The accessibility gaps found in the abstraction audit, now closed: one
+ * status vocabulary, a lightbox that traps and restores focus, a TOC panel
+ * that is not a live region, and a keyboard-reachable reader pane.
+ */
+test('Every pane reports through the one shared status line', () => {
+  for (const text of [
+    'id="toc-manager-status"',
+    'id="image-status"',
+    'id="pdf-status"',
+    'id="editor-notice"',
+  ]) {
+    assert.ok(component.includes(`<StatusLine`), 'App.vue must use StatusLine');
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+  for (const text of [
+    'class="status-line"',
+    ':class="{ error }"',
+    'role="status"',
+    ':aria-live="live"',
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('The lightbox keeps and returns focus', () => {
+  for (const text of [
+    'previouslyFocused = document.activeElement',
+    "event.key !== 'Tab'",
+    'previouslyFocused.focus()',
+    'aria-modal="true"',
+    "document.querySelector('.lightbox')?.focus()",
+  ]) {
+    assert.ok(component.includes(text), `missing ${text}`);
+  }
+});
+
+test('The interactive TOC panel is not announced as a live region', () => {
+  const panel = /<nav id="toc-panel"[^>]*>/.exec(component);
+  assert.ok(panel, 'the TOC panel must exist');
+  assert.ok(
+    !panel[0].includes('aria-live'),
+    'a nav of buttons must not be a live region',
+  );
+});
+
+test('The reader pane can be scrolled with the keyboard', () => {
+  const region = /<div[^>]*id="pdf-content"[^>]*>/.exec(component);
+  assert.ok(region, 'the reader pane must exist');
+  assert.match(region[0], /tabindex="0"/);
+  assert.match(region[0], /role="region"/);
+  assert.match(region[0], /aria-label="PDF pages"/);
 });

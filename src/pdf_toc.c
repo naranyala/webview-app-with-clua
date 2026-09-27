@@ -7,7 +7,7 @@
 
 #include "pdf_toc.h"
 
-#include "app_support.h"
+#include "json_io.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,9 +31,30 @@ void pdf_toc_clear(pdf_toc *toc) {
 }
 
 /*
+ * Heading heuristics. Every threshold is named so a tuning change is a diff,
+ * not a hunt through the parser.
+ */
+#define PDF_HEADING_TITLE_MAX_CHARS 180
+#define PDF_HEADING_MAX_WORDS 12
+#define PDF_HEADING_MIN_ALPHA_CHARS 2
+#define PDF_HEADING_LARGE_RATIO 1.55
+#define PDF_HEADING_MEDIUM_RATIO 1.25
+#define PDF_HEADING_LEVEL1_RATIO 1.5
+
+/* Counts UTF-8 characters, which is what the title cap is specified in. */
+size_t pdf_toc_count_characters(const char *text) {
+    size_t count = 0;
+    for (const unsigned char *cursor = (const unsigned char *)text; *cursor != '\0'; cursor++) {
+        if ((*cursor & 0xC0) != 0x80) count++;
+    }
+    return count;
+}
+
+/*
  * Appends one normalized heading. Titles are whitespace-collapsed, capped at
- * 180 characters, and deduplicated against the previous entry on the same
- * page. Returns 1 when the heading was stored.
+ * PDF_HEADING_TITLE_MAX_CHARS characters (not bytes, so a CJK or Cyrillic
+ * heading is not silently dropped), and deduplicated against the previous
+ * entry on the same page. Returns 1 when the heading was stored.
  */
 static int append_heading(pdf_toc *toc, int page, int level, double position, const char *title) {
     GString *clean_title = g_string_new(NULL);
@@ -46,7 +67,7 @@ static int append_heading(pdf_toc *toc, int page, int level, double position, co
         }
     }
     g_strstrip(clean_title->str);
-    if (clean_title->len == 0 || clean_title->len > 180) {
+    if (clean_title->len == 0 || pdf_toc_count_characters(clean_title->str) > PDF_HEADING_TITLE_MAX_CHARS) {
         g_string_free(clean_title, TRUE);
         return 0;
     }
@@ -126,10 +147,10 @@ static int is_text_heading(const char *title, double size_ratio) {
         if (g_ascii_isalpha(*character)) alpha_count++;
         if (*character == ' ') word_count++;
     }
-    if (alpha_count < 2 || word_count > 12) return 0;
+    if (alpha_count < PDF_HEADING_MIN_ALPHA_CHARS || word_count > PDF_HEADING_MAX_WORDS) return 0;
     if (is_numbered_heading(title)) return 1;
-    if (size_ratio >= 1.55) return is_title_like(title);
-    return size_ratio >= 1.25 && is_title_like(title);
+    if (size_ratio >= PDF_HEADING_LARGE_RATIO) return is_title_like(title);
+    return size_ratio >= PDF_HEADING_MEDIUM_RATIO && is_title_like(title);
 }
 
 /* Ascending qsort comparator that handles doubles without subtracting into int. */
@@ -211,7 +232,7 @@ static int extract_tsv_headings(const char *text, pdf_toc *toc) {
     for (size_t index = 0; index < line_count; index++) {
         double ratio = lines[index].height / body_height;
         if (is_text_heading(lines[index].title->str, ratio)) {
-            int level = is_numbered_heading(lines[index].title->str) || ratio >= 1.5 ? 1 : ratio >= 1.25 ? 2 : 3;
+            int level = is_numbered_heading(lines[index].title->str) || ratio >= PDF_HEADING_LEVEL1_RATIO ? 1 : ratio >= PDF_HEADING_MEDIUM_RATIO ? 2 : 3;
             append_heading(toc, lines[index].page, level, lines[index].height, lines[index].title->str);
         }
         g_string_free(lines[index].title, TRUE);
@@ -327,7 +348,7 @@ char *build_toc_response(const pdf_toc_request *request, const pdf_toc *toc, int
         if (index > 0) g_string_append_c(response, ',');
         g_string_append_printf(response, "{\"page\":%d,\"level\":%d,\"position\":%.2f,\"title\":",
             toc->items[index].page, toc->items[index].level, toc->items[index].position);
-        append_json_string(response, toc->items[index].title);
+        json_append_string(response, toc->items[index].title);
         g_string_append_c(response, '}');
     }
     g_string_append(response, "]}");

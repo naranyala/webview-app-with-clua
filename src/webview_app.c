@@ -6,11 +6,14 @@
  * (external dev URL, file:// URL, or inline set_html fallback). The work each
  * binding performs lives in its own module:
  *
- *   app_support.c         JSON/errors, file URLs, GTK path chooser
+ *   json_io.c             the single JSON writer and request reader
+ *   app_support.c         error replies, file URLs, picker dispatch, chooser
  *   pdf_toc.c             PDF heading extraction, cache, serialization
  *   pdf_session.c         openPdf + extractPdfToc bindings
  *   image_directory.c     openImageDirectory binding
+ *   smoke.c               smokeVerdict verdict reporting for the smoke runner
  *   workspace_bindings.c  loadWorkspace + saveWorkspace bindings
+ *   text_transfer.c       openTextFile + saveTextFile bindings
  *   webview_bridge.c      summarize payload parsing and formatting
  *   workspace_store.c     durable workspace file access
  */
@@ -19,10 +22,13 @@
 #include "image_directory.h"
 #include "metrics.h"
 #include "pdf_session.h"
+#include "smoke.h"
+#include "text_transfer.h"
 #include "webview_bridge.h"
 #include "workspace_bindings.h"
 #include "workspace_store.h"
 
+#include <glib.h>
 #include <gtk/gtk.h>
 #include <webview/webview.h>
 
@@ -74,7 +80,7 @@ static void on_summarize(const char *id, const char *request, void *argument) {
 
     if (request == NULL) {
         fprintf(stderr, "summarize: received null request\n");
-        webview_return(app->view, id, 1, "{\"error\":{\"code\":\"NULL_REQUEST\",\"message\":\"No request data received.\"}}");
+        return_native_error(app->view, id, "NULL_REQUEST", "No request data received.");
         return;
     }
 
@@ -90,8 +96,7 @@ static void on_summarize(const char *id, const char *request, void *argument) {
 
     if (response[0] == '\0') {
         fprintf(stderr, "summarize: response buffer empty, sending fallback error\n");
-        webview_return(app->view, id, 1,
-            "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"Response could not be generated.\"}}");
+        return_native_error(app->view, id, "INTERNAL_ERROR", "Response could not be generated.");
         return;
     }
 
@@ -125,58 +130,35 @@ static const char *frontend_diagnostics_js =
     "window.addEventListener('unhandledrejection',function(event){report('Frontend promise rejection: '+String(event.reason));});"
     "}());";
 
-/* Reads the bundled index.html into a NUL-terminated buffer (caller frees). */
+/*
+ * Reads the bundled index.html into a NUL-terminated buffer (caller frees).
+ * g_file_get_contents does the reading, and set_html embeds the result
+ * verbatim, so a bundle containing NUL bytes is refused rather than silently
+ * cut short.
+ */
 static char *load_html(const char *path) {
-    FILE *file;
-    char *html;
-    long length;
+    char *html = NULL;
+    gsize length = 0;
+    GError *error = NULL;
 
     if (path == NULL) {
         fprintf(stderr, "load_html: path is NULL\n");
         return NULL;
     }
 
-    file = fopen(path, "rb");
-    if (file == NULL) {
-        fprintf(stderr, "load_html: cannot open '%s'\n", path);
+    if (!g_file_get_contents(path, &html, &length, &error)) {
+        fprintf(stderr, "load_html: cannot read '%s': %s\n", path,
+            error != NULL ? error->message : "unknown error");
+        g_clear_error(&error);
         return NULL;
     }
 
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fprintf(stderr, "load_html: seek failed for '%s'\n", path);
-        fclose(file);
+    if (memchr(html, '\0', length) != NULL) {
+        fprintf(stderr, "load_html: '%s' contains a NUL byte\n", path);
+        g_free(html);
         return NULL;
     }
 
-    length = ftell(file);
-    if (length < 0) {
-        fprintf(stderr, "load_html: ftell failed for '%s'\n", path);
-        fclose(file);
-        return NULL;
-    }
-
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "load_html: rewind failed for '%s'\n", path);
-        fclose(file);
-        return NULL;
-    }
-
-    html = malloc((size_t)length + 1);
-    if (html == NULL) {
-        fprintf(stderr, "load_html: out of memory allocating %ld bytes for '%s'\n", length, path);
-        fclose(file);
-        return NULL;
-    }
-
-    if (fread(html, 1, (size_t)length, file) != (size_t)length) {
-        fprintf(stderr, "load_html: read failed for '%s'\n", path);
-        free(html);
-        fclose(file);
-        return NULL;
-    }
-
-    html[length] = '\0';
-    fclose(file);
     return html;
 }
 
@@ -216,6 +198,14 @@ int main(void) {
     if (!check_webview_error("init frontend diagnostics", webview_init(app.view, frontend_diagnostics_js)))
         goto fail;
 
+    /* Smoke mode: flag the page before its scripts run (see scripts/smoke.sh). */
+    {
+        const char *smoke_script = smoke_init_script();
+        if (smoke_script != NULL &&
+            !check_webview_error("init smoke marker", webview_init(app.view, smoke_script)))
+            goto fail;
+    }
+
     {
         webview_error_t size_error = webview_set_size(app.view, 760, 540, WEBVIEW_HINT_NONE);
         if (WEBVIEW_FAILED(size_error)) {
@@ -241,6 +231,17 @@ int main(void) {
         goto fail;
 
     if (!check_webview_error("bind saveWorkspace", webview_bind(app.view, "saveWorkspace", on_save_workspace, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind openTextFile", webview_bind(app.view, "openTextFile", on_open_text_file, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind saveTextFile", webview_bind(app.view, "saveTextFile", on_save_text_file, &app)))
+        goto fail;
+
+    /* Only bound during a smoke run, so the frontend cannot call it otherwise. */
+    if (smoke_enabled() &&
+        !check_webview_error("bind smokeVerdict", webview_bind(app.view, "smokeVerdict", on_smoke_verdict, &app)))
         goto fail;
 
     /* Try to load the frontend */
@@ -279,7 +280,7 @@ int main(void) {
         goto fail;
 
     fprintf(stderr, "WebView closed gracefully.\n");
-    exit_code = 0;
+    exit_code = app.exit_code_override;
 
 fail:
     if (app.pdf_toc_thread != NULL) {

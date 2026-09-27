@@ -16,10 +16,15 @@ import {
   view,
 } from './app-shell.js';
 import { restoredWorkspace } from './boot-state.js';
+import LightboxDialog from './components/LightboxDialog.vue';
+import MenuView from './components/MenuView.vue';
+import StatusLine from './components/StatusLine.vue';
 import {
   cursorPosition,
   editorContent,
   editorInput,
+  editorNotice,
+  editorNoticeError,
   editorWordCount,
   updateCursor,
 } from './editor-session.js';
@@ -36,6 +41,7 @@ import {
   imageStatus,
   imageStatusError,
   imagesBadge,
+  lightboxIndex,
   loadBrowserImageDirectory,
   openImageDirectory,
   openLightbox,
@@ -84,23 +90,43 @@ import {
   addTocItem,
   attachImageToToc,
   attachPdfPageToToc,
+  cancelTocEdit,
   configureTocOutline,
+  editingTocId,
+  editorImportInput,
+  exportActiveDraftToFile,
+  exportTocToFile,
+  filteredTocItems,
+  handleEditorImportFile,
+  handleTocImportFile,
+  importActiveDraftFromFile,
   importPdfHeadingsToToc,
+  importTocFromFile,
+  lastRemoved,
   linkTarget,
   linkTargetId,
+  moveTocItem,
   nextTocItem,
   openLinkedImages,
   openLinkedPdfPage,
   previousTocItem,
   removeTocItem,
+  saveTocEdit,
   selectTocItem,
+  showTocFilter,
+  startTocEdit,
   syncTocDraft,
   tocDraftLevel,
   tocDraftTitle,
+  tocEditLevel,
+  tocEditTitle,
+  tocFilterQuery,
+  tocImportInput,
   tocItemLabel,
   tocItems,
   tocStatus,
   tocStatusError,
+  undoTocRemoval,
 } from './toc-outline.js';
 import {
   countWords,
@@ -112,7 +138,7 @@ import {
   saveWorkspaceNative,
   serializeWorkspace,
 } from './workspace.js';
-import { formatWorkspaceReport } from './workspace-report.js';
+import { createWorkspacePersistence } from './workspace-persistence.js';
 
 /*
  * Composition layer.
@@ -121,12 +147,14 @@ import { formatWorkspaceReport } from './workspace-report.js';
  * src/toc-outline.js, and src/app-shell.js; this file wires them together,
  * owns cross-tool labels, and runs the persistence loop: snapshot, debounce,
  * native write, restore, and the header report when either direction fails.
+ * The Text Editor is gated: with no picked outline section the pane shows a
+ * picker instead of the textarea, so every draft belongs to a declared item.
  */
 
 /* --- cross-tool labels ---------------------------------------------------- */
 
 const documentTitle = computed(() =>
-  activeTocItem.value ? activeTocItem.value.title : 'untitled.txt',
+  activeTocItem.value ? activeTocItem.value.title : 'No section selected',
 );
 
 const outlineSummaryState = computed(() => outlineSummary(tocItems.value));
@@ -142,9 +170,9 @@ const editorBadge = computed(() => {
     return `Writing “${activeTocItem.value.title}” · ${editorWordCount.value} words`;
   }
   if (editorWordCount.value > 0) {
-    return `${editorWordCount.value} words in an untitled draft`;
+    return `${editorWordCount.value} words in an unpicked draft`;
   }
-  return 'Write each section of your outline';
+  return 'Pick a section to start writing';
 });
 
 const saveLabel = computed(() => {
@@ -153,16 +181,15 @@ const saveLabel = computed(() => {
   return 'not saved';
 });
 
+/*
+ * The footer only renders once a section is picked (the gate covers the pane
+ * otherwise), so the active-item form is the only reachable one.
+ */
 const documentStatus = computed(() => {
   const words =
     editorWordCount.value === 0
       ? 'Empty document'
       : `${editorWordCount.value} word${editorWordCount.value === 1 ? '' : 's'}`;
-  if (activeTocIndex.value < 0) {
-    return tocItems.value.length > 0
-      ? `${words} · pick a section in Outline`
-      : `${words} · declare a section to start writing`;
-  }
   return [
     `Item ${activeTocIndex.value + 1} of ${tocItems.value.length}`,
     words,
@@ -172,6 +199,15 @@ const documentStatus = computed(() => {
 
 /* --- view transitions ----------------------------------------------------- */
 
+/*
+ * The editor gate's empty-outline action: declare flow lives only in the TOC
+ * Manager, so jump there and focus the declare input.
+ */
+function goDeclareSection() {
+  selectView('toc');
+  nextTick(() => document.getElementById('toc-title-input')?.focus());
+}
+
 /* Leaving the editor flushes the draft; entering the PDF resumes its session. */
 onViewLeaveEditor(() => syncTocDraft());
 onViewEnterPdf(() => {
@@ -180,127 +216,58 @@ onViewEnterPdf(() => {
 
 /* --- workspace persistence ------------------------------------------------ */
 
-const persistenceMode = ref(hasNativeWorkspaceStore() ? 'native' : 'local');
-const workspaceReport = ref(null);
-
 /*
- * Mirrors the latest persistence failure from workspace.js into a sentence the
- * header can show. The report clears once the underlying problem is resolved.
+ * The engine itself lives in workspace-persistence.js with injected sessions,
+ * store, and timers, so the write order, the debounce, and the boot/native
+ * reconciliation are unit tested instead of living in this component. What is
+ * left here is wiring plus the one policy decision it cannot make alone: a
+ * workspace that could not be written anywhere is also a TOC-level problem.
  */
-function refreshWorkspaceReport() {
-  workspaceReport.value = formatWorkspaceReport(getWorkspaceReport());
-}
+const persistence = createWorkspacePersistence({
+  sessions: {
+    view,
+    tocItems,
+    activeTocId,
+    linkTargetId,
+    editorContent,
+    pdfName,
+    pdfSessionSize,
+    pdfSourceUrl,
+    pdfDocumentId,
+    pdfPageNumber,
+    pdfZoom,
+    imageDirectoryName,
+    selectedImageGroup,
+  },
+  store: {
+    serializeWorkspace,
+    saveWorkspace,
+    hasNativeWorkspaceStore,
+    loadWorkspaceNative,
+    saveWorkspaceNative,
+    getWorkspaceReport,
+    hasUserInteracted,
+  },
+  boot: restoredWorkspace,
+  onPersistenceFailure(message) {
+    tocStatusError.value = true;
+    tocStatus.value = message;
+  },
+});
 
-refreshWorkspaceReport();
-
-/* Snapshot of everything worth restoring after a restart. */
-function workspaceState() {
-  return {
-    view: view.value,
-    tocItems: tocItems.value,
-    activeTocId: activeTocId.value,
-    editor: { content: editorContent.value },
-    pdf: {
-      name: pdfName.value,
-      size: pdfSessionSize.value,
-      url: pdfSourceUrl.value,
-      documentId: pdfDocumentId.value,
-      page: pdfPageNumber.value,
-      zoom: pdfZoom.value,
-    },
-    images: {
-      directoryName: imageDirectoryName.value,
-      selectedGroup: selectedImageGroup.value,
-    },
-  };
-}
-
-let workspaceSaveTimer = 0;
-
-/*
- * Writes the snapshot to localStorage first (synchronous boot cache) and then,
- * when the host provides it, to the durable store. Failures are reported
- * through the header pill rather than only the TOC status.
- */
-function persistWorkspace() {
-  const state = { ...workspaceState(), savedAt: Date.now() };
-  const serialized = serializeWorkspace(state);
-  const savedLocally = saveWorkspace(state);
-  if (!hasNativeWorkspaceStore()) {
-    persistenceMode.value = savedLocally ? 'local' : 'none';
-    refreshWorkspaceReport();
-    return savedLocally;
-  }
-  saveWorkspaceNative(serialized).then((savedNatively) => {
-    if (savedNatively) {
-      persistenceMode.value = 'native';
-      refreshWorkspaceReport();
-      return;
-    }
-    persistenceMode.value = savedLocally ? 'local' : 'none';
-    refreshWorkspaceReport();
-    if (!savedLocally) {
-      tocStatusError.value = true;
-      tocStatus.value = 'The workspace could not be saved to this device.';
-    }
-  });
-  // The native write finishes later; failures surface through the header
-  // report, persistenceMode, and the TOC status rather than this return value.
-  return true;
-}
-
-function flushWorkspace() {
-  if (workspaceSaveTimer) {
-    clearTimeout(workspaceSaveTimer);
-    workspaceSaveTimer = 0;
-  }
-  return persistWorkspace();
-}
-
-function scheduleWorkspaceSave() {
-  if (workspaceSaveTimer) clearTimeout(workspaceSaveTimer);
-  workspaceSaveTimer = setTimeout(flushWorkspace, 250);
-}
+const {
+  persistenceMode,
+  workspaceReport,
+  snapshot,
+  apply: applyWorkspace,
+  persist: persistWorkspace,
+  flush: flushWorkspace,
+  schedule: scheduleWorkspaceSave,
+  hydrate: hydrateNativeWorkspace,
+} = persistence;
 
 /* The outline writes through this hook so it never imports this file back. */
 configureTocOutline({ persistNow: () => persistWorkspace() });
-
-/*
- * Restores a snapshot into the session modules. Returns false when the
- * snapshot is missing, so hydration can keep the boot state.
- */
-function applyWorkspace(snapshot) {
-  if (!snapshot) return false;
-  const activeId = snapshot.tocItems.some(
-    (item) => item.id === snapshot.activeTocId,
-  )
-    ? snapshot.activeTocId
-    : null;
-  view.value = snapshot.view;
-  tocItems.value = snapshot.tocItems;
-  activeTocId.value = activeId;
-  linkTargetId.value = activeId || snapshot.tocItems[0]?.id || null;
-  editorContent.value = snapshot.editor.content;
-  pdfName.value = snapshot.pdf.name || 'No document selected';
-  pdfSessionSize.value = snapshot.pdf.size;
-  pdfSourceUrl.value = snapshot.pdf.url;
-  pdfDocumentId.value = snapshot.pdf.documentId;
-  pdfPageNumber.value = snapshot.pdf.page;
-  pdfZoom.value = snapshot.pdf.zoom;
-  imageDirectoryName.value = snapshot.images.directoryName;
-  selectedImageGroup.value = snapshot.images.selectedGroup;
-  return true;
-}
-
-/* Loads the durable copy once at startup, unless the user already acted. */
-async function hydrateNativeWorkspace() {
-  if (!hasNativeWorkspaceStore() || hasUserInteracted()) return false;
-  const snapshot = await loadWorkspaceNative();
-  refreshWorkspaceReport();
-  if (!snapshot || hasUserInteracted()) return false;
-  if (snapshot.savedAt < restoredWorkspace.savedAt) return false;
-  return applyWorkspace(snapshot);
-}
 
 /* --- watchers -------------------------------------------------------------- */
 
@@ -360,17 +327,7 @@ function handleVisibilityChange() {
 }
 
 onMounted(async () => {
-  const savedLocally = saveWorkspace({
-    ...workspaceState(),
-    savedAt: Date.now(),
-  });
-  if (hasNativeWorkspaceStore()) {
-    persistenceMode.value = 'native';
-    await hydrateNativeWorkspace();
-  } else {
-    persistenceMode.value = savedLocally ? 'local' : 'none';
-    refreshWorkspaceReport();
-  }
+  await hydrateNativeWorkspace();
 
   if (view.value === 'pdf' && pdfSourceUrl.value) resumePdfSession();
   if (
@@ -432,47 +389,20 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <section v-show="view === 'menu'" class="app-menu" data-view="menu" aria-label="Application menu">
-      <div class="menu-heading">
-        <span>APPLICATIONS</span>
-        <h1>What would you like to open?</h1>
-        <p>Choose a local tool to get started.</p>
-      </div>
-      <div class="app-grid">
-        <button class="app-card" data-app="editor" type="button" @click="selectView('editor')">
-          <span class="app-icon text-icon" aria-hidden="true">Aa</span>
-          <span class="app-card-copy">
-            <strong>Text Editor</strong>
-            <small :title="editorBadge">{{ editorBadge }}</small>
-          </span>
-          <span class="app-card-arrow" aria-hidden="true">›</span>
-        </button>
-        <button class="app-card" data-app="pdf" type="button" @click="selectView('pdf')">
-          <span class="app-icon pdf-icon" aria-hidden="true">PDF</span>
-          <span class="app-card-copy">
-            <strong>PDF Reader</strong>
-            <small :title="pdfBadge">{{ pdfBadge }}</small>
-          </span>
-          <span class="app-card-arrow" aria-hidden="true">›</span>
-        </button>
-        <button class="app-card" data-app="images" type="button" @click="selectView('images')">
-          <span class="app-icon image-icon" aria-hidden="true">IMG</span>
-          <span class="app-card-copy">
-            <strong>Image Viewer</strong>
-            <small :title="imagesBadge">{{ imagesBadge }}</small>
-          </span>
-          <span class="app-card-arrow" aria-hidden="true">›</span>
-        </button>
-        <button class="app-card" data-app="toc" type="button" @click="selectView('toc')">
-          <span class="app-icon toc-manager-icon" aria-hidden="true">TOC</span>
-          <span class="app-card-copy">
-            <strong>TOC Manager</strong>
-            <small :title="outlineBadge">{{ outlineBadge }}</small>
-          </span>
-          <span class="app-card-arrow" aria-hidden="true">›</span>
-        </button>
-      </div>
-    </section>
+    <!--
+      v-show on the wrapper keeps the four panes' DOM present for every view,
+      which is what lets the WebKit repaint watcher and the smoke test find
+      their anchors in a fresh boot.
+    -->
+    <div v-show="view === 'menu'" class="app-menu-pane">
+      <MenuView
+        :editor-badge="editorBadge"
+        :pdf-badge="pdfBadge"
+        :images-badge="imagesBadge"
+        :outline-badge="outlineBadge"
+        @select="selectView"
+      />
+    </div>
 
     <section v-show="view === 'toc'" class="toc-manager" data-view="toc" aria-label="TOC manager application">
       <header class="toc-manager-toolbar">
@@ -481,64 +411,124 @@ onBeforeUnmount(() => {
           <strong id="toc-manager-count">{{ tocItemLabel }}</strong>
         </div>
         <div class="toc-manager-actions">
-          <span id="toc-manager-status" class="toc-manager-status" :class="{ error: tocStatusError }" :title="tocStatus" aria-live="polite">{{ tocStatus }}</span>
+          <StatusLine
+            id="toc-manager-status"
+            class="toc-manager-status"
+            :message="tocStatus"
+            :error="tocStatusError"
+          />
+          <button class="toolbar-button subtle" id="toc-import-json" type="button" @click="importTocFromFile">Import…</button>
+          <button class="toolbar-button subtle" id="toc-export-json" type="button" :disabled="tocItems.length === 0" @click="exportTocToFile">Export…</button>
+          <button v-if="lastRemoved" class="toolbar-button subtle toc-undo" id="toc-undo-remove" type="button" @click="undoTocRemoval">Undo remove</button>
           <button class="toolbar-button subtle" id="resume-writing" type="button" :disabled="!activeTocId" @click="selectView('editor')">Resume writing</button>
         </div>
       </header>
 
-      <div class="toc-manager-body">
-        <form class="toc-declare" @submit.prevent="addTocItem">
-          <div class="toc-declare-heading">
-            <span>DECLARE</span>
-            <strong>New outline item</strong>
-          </div>
-          <label for="toc-title-input">Heading title</label>
-          <input
-            id="toc-title-input"
-            v-model="tocDraftTitle"
-            type="text"
-            maxlength="120"
-            autocomplete="off"
-            placeholder="Chapter 1 · Introduction"
-          />
-          <label for="toc-level-input">Level</label>
-          <select id="toc-level-input" v-model="tocDraftLevel">
-            <option :value="1">Level 1 · Chapter</option>
-            <option :value="2">Level 2 · Section</option>
-            <option :value="3">Level 3 · Subsection</option>
-          </select>
-          <button class="toolbar-button primary" type="submit">Declare item</button>
-          <p class="toc-declare-hint">
-            Selecting an item opens it in the Text Editor. Every draft is stored per item in this
-            browser.
-          </p>
-        </form>
+      <input
+        id="toc-import-input"
+        ref="tocImportInput"
+        class="sr-only"
+        type="file"
+        accept=".json,application/json"
+        @change="handleTocImportFile"
+      />
 
+      <div class="toc-manager-body">
         <div class="toc-outline">
           <div class="toc-outline-heading">
             <span>DECLARED ITEMS</span>
             <span>Select an item to write</span>
           </div>
-          <ul v-if="tocItems.length" class="toc-outline-list">
+
+          <form class="toc-declare-bar" @submit.prevent="addTocItem">
+            <label class="sr-only" for="toc-title-input">Heading title</label>
+            <input
+              id="toc-title-input"
+              v-model="tocDraftTitle"
+              type="text"
+              maxlength="120"
+              autocomplete="off"
+              placeholder="New section title…"
+            />
+            <label class="sr-only" for="toc-level-input">Level</label>
+            <select id="toc-level-input" v-model="tocDraftLevel">
+              <option :value="1">H1 · Chapter</option>
+              <option :value="2">H2 · Section</option>
+              <option :value="3">H3 · Subsection</option>
+            </select>
+            <button class="toolbar-button primary" type="submit">Add section</button>
+          </form>
+          <p class="toc-bar-hint">
+            Selecting an item opens it in the Text Editor. Every draft is stored per item in this
+            browser.
+          </p>
+
+          <div v-if="showTocFilter" class="toc-filter">
+            <label class="sr-only" for="toc-filter-input">Filter sections</label>
+            <input
+              id="toc-filter-input"
+              v-model="tocFilterQuery"
+              type="search"
+              autocomplete="off"
+              placeholder="Filter sections…"
+            />
+          </div>
+
+          <ul v-if="tocItems.length && filteredTocItems.length" class="toc-outline-list">
             <li
-              v-for="item in tocItems"
+              v-for="(item, index) in filteredTocItems"
               :key="item.id"
               class="toc-outline-item"
               :class="{ active: activeTocId === item.id }"
               :style="{ '--toc-level': item.level }"
             >
-              <button class="toc-outline-select" type="button" @click="selectTocItem(item)">
-                <span class="toc-outline-title">{{ item.title }}</span>
-                <small>{{ countWords(item.content) }} word{{ countWords(item.content) === 1 ? '' : 's' }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
-              </button>
-              <div class="toc-outline-meta">
-                <span class="toc-outline-level">H{{ item.level }}</span>
-                <button v-if="item.links.pdfPage" class="toc-outline-link" type="button" :title="`Open ${item.links.pdfName || 'the PDF'} at page ${item.links.pdfPage}`" @click="openLinkedPdfPage(item)">p.{{ item.links.pdfPage }}</button>
-                <button v-if="item.links.images.length" class="toc-outline-link" type="button" :title="`${item.links.images.length} attached image(s)`" @click="openLinkedImages(item)">IMG {{ item.links.images.length }}</button>
-                <button class="toc-outline-remove" type="button" :aria-label="`Remove ${item.title}`" @click="removeTocItem(item)">×</button>
-              </div>
+              <form v-if="editingTocId === item.id" class="toc-edit" @submit.prevent="saveTocEdit(item)">
+                <label class="sr-only" for="toc-edit-input">Heading title</label>
+                <input id="toc-edit-input" v-model="tocEditTitle" type="text" maxlength="120" autocomplete="off" />
+                <label class="sr-only" for="toc-edit-level">Level</label>
+                <select id="toc-edit-level" v-model="tocEditLevel">
+                  <option :value="1">H1</option>
+                  <option :value="2">H2</option>
+                  <option :value="3">H3</option>
+                </select>
+                <button class="toolbar-button primary" type="submit">Save</button>
+                <button class="toolbar-button subtle" type="button" @click="cancelTocEdit">Cancel</button>
+              </form>
+              <template v-else>
+                <button class="toc-outline-select" type="button" @click="selectTocItem(item)">
+                  <span class="toc-outline-title">{{ item.title }}</span>
+                  <small>{{ countWords(item.content) }} word{{ countWords(item.content) === 1 ? '' : 's' }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
+                </button>
+                <div class="toc-outline-meta">
+                  <span class="toc-outline-level">H{{ item.level }}</span>
+                  <button v-if="item.links.pdfPage" class="toc-outline-link" type="button" :title="`Open ${item.links.pdfName || 'the PDF'} at page ${item.links.pdfPage}`" @click="openLinkedPdfPage(item)">p.{{ item.links.pdfPage }}</button>
+                  <button v-if="item.links.images.length" class="toc-outline-link" type="button" :title="`${item.links.images.length} attached image(s)`" @click="openLinkedImages(item)">IMG {{ item.links.images.length }}</button>
+                  <button
+                    class="toc-outline-move"
+                    type="button"
+                    :disabled="Boolean(tocFilterQuery.trim()) || index === 0"
+                    :title="tocFilterQuery.trim() ? 'Clear the filter to reorder' : `Move ${item.title} up`"
+                    :aria-label="`Move ${item.title} up`"
+                    @click="moveTocItem(item, -1)"
+                  >↑</button>
+                  <button
+                    class="toc-outline-move"
+                    type="button"
+                    :disabled="Boolean(tocFilterQuery.trim()) || index === filteredTocItems.length - 1"
+                    :title="tocFilterQuery.trim() ? 'Clear the filter to reorder' : `Move ${item.title} down`"
+                    :aria-label="`Move ${item.title} down`"
+                    @click="moveTocItem(item, 1)"
+                  >↓</button>
+                  <button class="toc-outline-edit" type="button" :aria-label="`Edit ${item.title}`" @click="startTocEdit(item)">✎</button>
+                  <button class="toc-outline-remove" type="button" :aria-label="`Remove ${item.title}`" @click="removeTocItem(item)">×</button>
+                </div>
+              </template>
             </li>
           </ul>
+          <div v-else-if="tocItems.length" class="toc-outline-no-match">
+            <p>No sections match “{{ tocFilterQuery.trim() }}”.</p>
+            <button class="toolbar-button subtle" type="button" @click="tocFilterQuery = ''">Clear filter</button>
+          </div>
           <div v-else class="toc-outline-empty">
             <span class="toc-outline-empty-icon" aria-hidden="true">TOC</span>
             <h2>No outline items yet</h2>
@@ -561,27 +551,75 @@ onBeforeUnmount(() => {
           <button v-if="activeTocItem?.links?.pdfPage" class="toolbar-button subtle" id="open-linked-pdf" type="button" @click="openLinkedPdfPage(activeTocItem)">PDF p.{{ activeTocItem.links.pdfPage }}</button>
           <button v-if="activeTocItem" class="toolbar-button subtle" id="previous-outline-item" type="button" :disabled="!previousTocItem" @click="previousTocItem && selectTocItem(previousTocItem)">‹ Prev</button>
           <button v-if="activeTocItem" class="toolbar-button subtle" id="next-outline-item" type="button" :disabled="!nextTocItem" @click="nextTocItem && selectTocItem(nextTocItem)">Next ›</button>
+          <button v-if="activeTocItem" class="toolbar-button subtle" id="editor-import-file" type="button" @click="importActiveDraftFromFile">Import…</button>
+          <button v-if="activeTocItem" class="toolbar-button subtle" id="editor-export-file" type="button" :disabled="!editorContent.trim()" @click="exportActiveDraftToFile">Export…</button>
         </div>
       </header>
 
       <div class="editor-pane">
-        <label class="sr-only" for="values">Document text</label>
-        <textarea
-          id="values"
-          ref="editorInput"
-          :value="editorContent"
-          spellcheck="true"
-          placeholder="Start writing…"
-          aria-describedby="document-status"
-          @input="editorContent = $event.target.value; updateCursor(); syncTocDraft()"
-          @click="updateCursor"
-          @keyup="updateCursor"
-        />
-        <div class="editor-footer">
-          <span id="document-status">{{ documentStatus }}</span>
-          <span id="cursor-position">{{ cursorPosition }}</span>
-        </div>
+        <section v-if="!activeTocItem" class="toc-pick" aria-label="Pick a section to write">
+          <div class="toc-pick-card">
+            <span class="toc-pick-eyebrow">TEXT EDITOR</span>
+            <h2>What are you writing?</h2>
+            <p class="toc-pick-hint">Writing always belongs to a declared section. Pick one to load its draft.</p>
+            <ul v-if="tocItems.length" class="toc-pick-list">
+              <li v-for="item in tocItems" :key="item.id">
+                <button class="toc-pick-item" type="button" :data-pick-id="item.id" @click="selectTocItem(item)">
+                  <span class="toc-pick-level">H{{ item.level }}</span>
+                  <span class="toc-pick-copy">
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ countWords(item.content) }} word{{ countWords(item.content) === 1 ? '' : 's' }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
+                  </span>
+                </button>
+              </li>
+            </ul>
+            <div v-else class="toc-pick-empty">
+              <h3>No sections yet</h3>
+              <p>Declare your first section in the TOC Manager, then pick it here.</p>
+            </div>
+            <button
+              class="toolbar-button"
+              :class="tocItems.length ? 'subtle' : 'primary'"
+              id="declare-first-section"
+              type="button"
+              @click="goDeclareSection"
+            >{{ tocItems.length ? 'Declare another section' : 'Declare the first section' }}</button>
+          </div>
+        </section>
+        <template v-else>
+          <label class="sr-only" for="values">Document text</label>
+          <textarea
+            id="values"
+            ref="editorInput"
+            :value="editorContent"
+            spellcheck="true"
+            placeholder="Start writing…"
+            aria-describedby="document-status"
+            @input="editorContent = $event.target.value; updateCursor(); syncTocDraft()"
+            @click="updateCursor"
+            @keyup="updateCursor"
+          />
+          <div class="editor-footer">
+            <span id="document-status">{{ documentStatus }}</span>
+            <span
+              v-if="editorNotice"
+              id="editor-notice"
+              :class="{ error: editorNoticeError }"
+              role="status"
+            >{{ editorNotice }}</span>
+            <span id="cursor-position">{{ cursorPosition }}</span>
+          </div>
+        </template>
       </div>
+
+      <input
+        id="editor-import-input"
+        ref="editorImportInput"
+        class="sr-only"
+        type="file"
+        accept=".txt,.md,.markdown,text/plain,text/markdown"
+        @change="handleEditorImportFile"
+      />
     </section>
 
     <section v-show="view === 'images'" class="image-app" data-view="images" aria-label="Image viewer application">
@@ -591,7 +629,12 @@ onBeforeUnmount(() => {
           <strong>{{ imageDirectoryName || 'Choose an image directory' }}</strong>
         </div>
         <div class="image-actions">
-          <span id="image-status" class="image-status" :class="{ error: imageStatusError }" :title="imageStatus" aria-live="polite">{{ imageStatus }}</span>
+          <StatusLine
+            id="image-status"
+            class="image-status"
+            :message="imageStatus"
+            :error="imageStatusError"
+          />
           <button v-show="imageFiles.length > 0" class="toolbar-button primary" id="open-image-directory" type="button" :disabled="imageLoading" @click="openImageDirectory">Choose directory</button>
         </div>
       </header>
@@ -642,7 +685,12 @@ onBeforeUnmount(() => {
           <strong id="pdf-name">{{ pdfName }}</strong>
         </div>
         <div class="pdf-actions">
-          <span id="pdf-status" class="pdf-status" :class="{ error: pdfStatusError }" :title="pdfStatus" aria-live="polite">{{ pdfStatus }}</span>
+          <StatusLine
+            id="pdf-status"
+            class="pdf-status"
+            :message="pdfStatus"
+            :error="pdfStatusError"
+          />
           <button v-show="pdfDocument" class="toolbar-button primary" id="open-pdf" type="button" @click="openPdf">Open PDF</button>
         </div>
       </header>
@@ -651,7 +699,12 @@ onBeforeUnmount(() => {
           <span>CONTENTS</span>
           <strong id="toc-count">{{ tocCount }}</strong>
         </div>
-        <nav id="toc-panel" class="toc-panel" :data-state="tocState" aria-live="polite">
+        <!--
+          Not a live region: it wraps the whole interactive outline list, so
+          announcing it would read every button on each change. The message it
+          shows is a StatusLine, which is the live region.
+        -->
+        <nav id="toc-panel" class="toc-panel" :data-state="tocState">
           <p v-if="tocState !== 'ready'" class="toc-message">{{ tocMessage }}</p>
           <button
             v-for="heading in tocHeadings"
@@ -676,7 +729,19 @@ onBeforeUnmount(() => {
           <button class="toolbar-button subtle" type="button" :disabled="!tocHeadings.length" @click="importPdfHeadingsToToc">Import {{ tocHeadings.length }} heading{{ tocHeadings.length === 1 ? '' : 's' }}</button>
         </div>
       </aside>
-      <div ref="pdfContentElement" class="pdf-content" @scroll.passive="handlePdfScroll">
+      <!--
+        tabindex + role: the reader pane is a scroll container, so without them
+        it can only be driven with a mouse.
+      -->
+      <div
+        id="pdf-content"
+        ref="pdfContentElement"
+        class="pdf-content"
+        role="region"
+        aria-label="PDF pages"
+        tabindex="0"
+        @scroll.passive="handlePdfScroll"
+      >
         <input id="pdf-file-input" ref="pdfFileInput" class="sr-only" type="file" accept="application/pdf,.pdf" @change="handlePdfFile" />
         <div v-show="!pdfDocument" class="pdf-empty" id="pdf-empty">
           <span class="pdf-large-icon" aria-hidden="true">PDF</span>
@@ -708,32 +773,18 @@ onBeforeUnmount(() => {
     </section>
 
     <Teleport to="body">
-      <div
-        v-if="activeLightboxImage"
-        class="lightbox"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Image preview"
-        tabindex="-1"
-        @click.self="closeLightbox"
-        @keydown="handleLightboxKeydown"
-      >
-        <button class="lightbox-close" type="button" aria-label="Close preview" @click="closeLightbox">×</button>
-        <button class="lightbox-nav previous" type="button" aria-label="Previous image" @click="changeLightbox(-1)">‹</button>
-        <figure>
-          <img :src="activeLightboxImage.dataUrl" :alt="activeLightboxImage.name" />
-          <figcaption>{{ activeLightboxImage.relativePath }}</figcaption>
-          <div class="lightbox-attach">
-            <label class="sr-only" for="lightbox-link-target">Outline item</label>
-            <select id="lightbox-link-target" v-model="linkTargetId">
-              <option :value="null" disabled>Select outline item</option>
-              <option v-for="item in tocItems" :key="item.id" :value="item.id">{{ item.title }}</option>
-            </select>
-            <button class="toolbar-button primary" type="button" :disabled="!linkTarget" @click="attachImageToToc(activeLightboxImage)">Attach to section</button>
-          </div>
-        </figure>
-        <button class="lightbox-nav next" type="button" aria-label="Next image" @click="changeLightbox(1)">›</button>
-      </div>
+      <LightboxDialog
+        :image="activeLightboxImage"
+        :position="lightboxIndex + 1"
+        :total="imageFiles.length"
+        :toc-items="tocItems"
+        :link-target-id="linkTargetId"
+        :link-target="linkTarget"
+        @close="closeLightbox"
+        @step="changeLightbox"
+        @attach="attachImageToToc"
+        @update:link-target-id="linkTargetId = $event"
+      />
     </Teleport>
   </main>
 </template>

@@ -9,6 +9,8 @@
  * boot cache and the native loadWorkspace/saveWorkspace calls.
  */
 
+import { getNativeBinding } from './native-bridge.js';
+
 export const WORKSPACE_KEY = 'native-workspace.workspace.v1';
 export const LEGACY_TOC_KEY = 'native-workspace.toc-items.v1';
 export const WORKSPACE_VERSION = 1;
@@ -16,7 +18,8 @@ export const WORKSPACE_VERSION = 1;
 const VIEWS = ['menu', 'editor', 'toc', 'pdf', 'images'];
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
-const MAX_IMAGES_PER_ITEM = 64;
+/* Exported because attaching an image must respect the cap a read enforces. */
+export const MAX_IMAGES_PER_ITEM = 64;
 
 let idSequence = 0;
 
@@ -272,15 +275,13 @@ export function saveWorkspace(state, storage) {
 const NATIVE_LOAD_COMMAND = 'loadWorkspace';
 const NATIVE_SAVE_COMMAND = 'saveWorkspace';
 
-function nativeBinding(name) {
-  const scope = globalThis;
-  if (typeof scope[name] === 'function') return scope[name];
-  const bridge = scope.__webview__;
-  if (bridge && typeof bridge.call === 'function') {
-    return (...args) => bridge.call(name, ...args);
-  }
-  return null;
-}
+/*
+ * Binding lookup belongs to native-bridge.js. This module used to keep its own
+ * copy that resolved against globalThis while the original resolved against
+ * window, so the two disagreed outside a browser and each test file had to
+ * install a different global to reach the store bindings.
+ */
+const nativeBinding = getNativeBinding;
 
 /* True when the desktop host exposes the file-backed workspace store. */
 export function hasNativeWorkspaceStore() {

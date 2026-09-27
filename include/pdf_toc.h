@@ -14,6 +14,14 @@
  */
 
 #include <glib.h>
+#include <stddef.h>
+
+/*
+ * Counts UTF-8 characters in text. The heading title cap is specified in
+ * characters, not bytes, so this is what the extractor measures; it is public
+ * so the distinction can be tested without a generated PDF.
+ */
+size_t pdf_toc_count_characters(const char *text);
 
 /* One extracted heading. title is owned by the pdf_toc that holds it. */
 typedef struct {

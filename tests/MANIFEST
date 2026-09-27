@@ -1,0 +1,33 @@
+# C test suites — the single source of truth.
+#
+# Make, build.lua, and CMake all read this file, so adding a suite is one edit
+# and `make test`, `lua build.lua test`, and `ctest` cannot drift apart.
+#
+# Format: profile | suite-name | source ...
+#   profile   selects the compile/link flags (see PROFILE_* in the Makefile,
+#             build_c_target in build.lua, and the CMAKE_* lists in
+#             CMakeLists.txt). Keep the three in step when adding one.
+#   name      becomes the binary (build/test_<name>), the make targets
+#             (<name>-test and <name>-sanitized), the ctest name, and the phony
+#             aggregate members. Keep it distinct from the GUI `smoke-test`
+#             target, which is a different thing entirely.
+#   sources   the .c files; every suite also depends on include/*.h, so a
+#             header change always rebuilds.
+#
+# Order here is the order make and build.lua run the suites in.
+#
+# Profiles:
+#   core        libc only, links libm (the pure engine)
+#   glib        glib strings/files, no math
+#   glib-math   glib plus libm
+#   pdftotext   glib, needs pdftotext on PATH
+#   gtk-stub    GTK and the webview stub header (host plumbing, no dialog runs)
+
+core | metrics | src/metrics.c tests/test_metrics.c
+glib-math | bridge | src/metrics.c src/webview_bridge.c src/json_io.c tests/test_bridge.c
+glib | workspace-store | src/workspace_store.c src/json_io.c tests/test_workspace_store.c
+glib | json-io | src/json_io.c tests/test_json_io.c
+gtk-stub | app-support | src/app_support.c src/json_io.c tests/test_app_support.c
+pdftotext | pdf-toc | src/pdf_toc.c src/json_io.c tests/test_pdf_toc.c
+gtk-stub | text-transfer | src/text_transfer.c src/app_support.c src/json_io.c tests/test_text_transfer.c
+gtk-stub | smoke-verdict | src/smoke.c src/app_support.c src/json_io.c tests/test_smoke.c

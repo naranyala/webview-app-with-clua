@@ -13,8 +13,6 @@
  * Ownership rules used across the app:
  *   - Functions returning char * hand the caller ownership (free with g_free
  *     or free, exactly as documented on each declaration).
- *   - json_escape() returns a shared static buffer: copy the result before
- *     calling it again, and never call it from two threads at once.
  */
 
 #include <stddef.h>
@@ -29,12 +27,15 @@ typedef struct {
     char *pdf_id;
     char *pdf_fingerprint;
     GThread *pdf_toc_thread;
+    /* Exit code forced by the smoke verdict; 0 leaves main()'s own code alone. */
+    int exit_code_override;
 } app_context;
 
-/* How a path chooser should behave: open one file, or pick a directory. */
+/* How a path chooser should behave: open one file, save one, or pick a directory. */
 typedef enum {
     PICKER_OPEN_FILE,
-    PICKER_SELECT_FOLDER
+    PICKER_SELECT_FOLDER,
+    PICKER_SAVE_FILE
 } picker_kind;
 
 /* Optional GTK filter applied to the chooser (name, pattern, MIME). */
@@ -48,6 +49,12 @@ typedef struct {
 typedef struct {
     char *request_id;
     app_context *app;
+    /*
+     * Optional raw copy of the binding request, owned by the callback.
+     * Text transfers stash their decoded-later arguments here; PDF and image
+     * pickers leave it NULL.
+     */
+    char *payload;
 } picker_request;
 
 /*
@@ -57,17 +64,11 @@ typedef struct {
  */
 typedef void (*picker_callback)(webview_t view, void *argument);
 
-/* Escapes a C string into a shared static buffer (see ownership rules). */
-const char *json_escape(const char *value);
-
-/* Appends "value" with surrounding quotes and full JSON escaping. */
-void append_json_string(GString *output, const char *value);
-
 /*
  * Rejects a pending webview request with the shared error shape
- * {"error":{"code":"...","message":"..."}}. This is the only supported way
- * for a binding to fail: a rejected promise keeps the frontend report path
- * working.
+ * {"error":{"code":"...","message":"..."}} written by json_io.c. This is the
+ * only supported way for a binding to fail: a rejected promise keeps the
+ * frontend report path working.
  */
 void return_native_error(webview_t view, const char *request_id, const char *code, const char *message);
 
@@ -76,9 +77,12 @@ int build_file_url(const char *path, char *url, size_t url_size);
 
 /*
  * Opens a modal GTK chooser and returns the selected path (caller frees), or
- * NULL when the user cancelled. Runs on the GTK main loop only.
+ * NULL when the user cancelled. suggested_name seeds the file name of a
+ * PICKER_SAVE_FILE chooser (ignored for the other kinds). Runs on the GTK
+ * main loop only.
  */
-char *run_path_chooser(webview_t view, picker_kind kind, const char *title, const picker_filter *filter);
+char *run_path_chooser(webview_t view, picker_kind kind, const char *title,
+    const picker_filter *filter, const char *suggested_name);
 
 /*
  * Marshals a picker onto the GTK main loop. Returns 1 when the callback was
@@ -86,5 +90,19 @@ char *run_path_chooser(webview_t view, picker_kind kind, const char *title, cons
  * callers never have to report twice.
  */
 int dispatch_picker(app_context *app, const char *request_id, picker_callback callback, const char *picker_name);
+
+/*
+ * Same contract as dispatch_picker(), with an optional payload (ownership
+ * transferred to the callback on success, freed here on failure).
+ */
+int dispatch_picker_with_payload(app_context *app, const char *request_id,
+    picker_callback callback, const char *picker_name, char *payload);
+
+/*
+ * Releases a picker_request and everything it owns, including the optional
+ * payload. Every picker callback must hand its request to this instead of
+ * freeing the fields by hand, so a payload can never be leaked.
+ */
+void picker_request_release(picker_request *request);
 
 #endif /* APP_SUPPORT_H */

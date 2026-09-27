@@ -13,9 +13,16 @@
 
 #include "workspace_store.h"
 
+#include "json_io.h"
+
+#include <gio/gio.h>
+
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -48,80 +55,73 @@ static void store_result_set(workspace_store_result *target,
 char *workspace_store_load(const char *path, size_t *length_out,
                            workspace_store_result *result) {
     workspace_store_result status = WORKSPACE_STORE_OK;
-    char *buffer = NULL;
-    long file_size = 0;
-    size_t read_count = 0;
-    FILE *file;
+    char *contents = NULL;
+    gsize length = 0;
+    GError *error = NULL;
 
     if (length_out != NULL) *length_out = 0;
-
     if (path == NULL) {
-        status = WORKSPACE_STORE_ERR_NULL;
-        goto done;
-    }
-
-    file = fopen(path, "rb");
-    if (file == NULL) {
-        status = (errno == ENOENT) ? WORKSPACE_STORE_OK : WORKSPACE_STORE_ERR_READ;
-        goto done;
-    }
-
-    if (fseek(file, 0, SEEK_END) != 0) {
-        status = WORKSPACE_STORE_ERR_READ;
-        fclose(file);
-        goto done;
-    }
-    file_size = ftell(file);
-    if (file_size < 0) {
-        status = WORKSPACE_STORE_ERR_READ;
-        fclose(file);
-        goto done;
-    }
-    if ((unsigned long)file_size > WORKSPACE_STORE_MAX_BYTES) {
-        status = WORKSPACE_STORE_ERR_TOO_LARGE;
-        fclose(file);
-        goto done;
-    }
-    rewind(file);
-
-    buffer = malloc((size_t)file_size + 1);
-    if (buffer == NULL) {
-        status = WORKSPACE_STORE_ERR_OUT_OF_MEMORY;
-        fclose(file);
-        goto done;
-    }
-
-    read_count = fread(buffer, 1, (size_t)file_size, file);
-    if (read_count != (size_t)file_size && ferror(file) != 0) {
-        free(buffer);
-        buffer = NULL;
-        status = WORKSPACE_STORE_ERR_READ;
-        fclose(file);
-        goto done;
-    }
-    fclose(file);
-
-    buffer[read_count] = '\0';
-    if (length_out != NULL) *length_out = read_count;
-
-done:
-    if (status == WORKSPACE_STORE_OK && buffer == NULL) {
-        buffer = malloc(1);
-        if (buffer == NULL) {
-            status = WORKSPACE_STORE_ERR_OUT_OF_MEMORY;
-        } else {
-            buffer[0] = '\0';
-        }
-    }
-    store_result_set(result, status);
-    if (status != WORKSPACE_STORE_OK) {
-        free(buffer);
+        store_result_set(result, WORKSPACE_STORE_ERR_NULL);
         return NULL;
     }
-    return buffer;
+
+    /*
+     * g_file_get_contents replaces the fopen/fseek/ftell/malloc/fread dance
+     * this used to spell out, and the "a missing file is not an error"
+     * contract is now one error-code comparison rather than an errno check.
+     */
+    if (!g_file_get_contents(path, &contents, &length, &error)) {
+        if (g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
+            g_clear_error(&error);
+            store_result_set(result, WORKSPACE_STORE_OK);
+            return calloc(1, 1);
+        }
+        g_clear_error(&error);
+        store_result_set(result, WORKSPACE_STORE_ERR_READ);
+        return NULL;
+    }
+
+    if (length > WORKSPACE_STORE_MAX_BYTES) {
+        g_free(contents);
+        store_result_set(result, WORKSPACE_STORE_ERR_TOO_LARGE);
+        return NULL;
+    }
+
+    if (length_out != NULL) *length_out = (size_t)length;
+    store_result_set(result, status);
+    return contents;
 }
 
-/* Writes to <path>.tmp and renames it over <path>, so a crash never truncates the store. */
+/*
+ * fsyncs the directory holding path so a completed rename survives a crash.
+ * The directory is copied onto the stack rather than allocated, so this adds
+ * no allocator to a module that deliberately uses one.
+ */
+static int sync_directory(const char *path) {
+    char directory[PATH_MAX];
+    const char *slash = strrchr(path, '/');
+    size_t length;
+    int descriptor;
+    int synced;
+
+    if (slash == NULL) {
+        directory[0] = '.';
+        length = 1;
+    } else {
+        length = (size_t)(slash - path);
+        if (length == 0) length = 1; /* a path like "/file" lives in "/" */
+    }
+    if (length >= sizeof(directory)) return -1;
+    memcpy(directory, path, length);
+    directory[length] = '\0';
+
+    descriptor = open(directory, O_RDONLY);
+    if (descriptor < 0) return -1;
+    synced = fsync(descriptor);
+    close(descriptor);
+    return synced;
+}
+
 workspace_store_result workspace_store_save(const char *path, const char *data,
                                             size_t length) {
     char *temporary = NULL;
@@ -148,13 +148,19 @@ workspace_store_result workspace_store_save(const char *path, const char *data,
         free(temporary);
         return WORKSPACE_STORE_ERR_WRITE;
     }
-    if (fflush(file) != 0 || fclose(file) != 0) {
+    if (fflush(file) != 0 || fsync(fileno(file)) != 0 || fclose(file) != 0) {
         remove(temporary);
         free(temporary);
         return WORKSPACE_STORE_ERR_WRITE;
     }
     if (rename(temporary, path) != 0) {
         remove(temporary);
+        free(temporary);
+        return WORKSPACE_STORE_ERR_WRITE;
+    }
+
+    /* The rename itself must reach the disk, or a crash can lose the new name. */
+    if (sync_directory(path) != 0) {
         free(temporary);
         return WORKSPACE_STORE_ERR_WRITE;
     }
@@ -174,181 +180,25 @@ int workspace_store_is_object(const char *data, size_t length) {
     return end > start && data[end - 1] == '}';
 }
 
-static void skip_whitespace(const char **cursor_ref) {
-    const char *cursor = *cursor_ref;
-    while (*cursor != '\0' && isspace((unsigned char)*cursor) != 0) cursor++;
-    *cursor_ref = cursor;
-}
-
-static int hex_value(char character) {
-    if (character >= '0' && character <= '9') return character - '0';
-    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
-    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
-    return -1;
-}
-
-static int read_hex4(const char *cursor, unsigned long *value_out) {
-    unsigned long value = 0;
-    for (size_t index = 0; index < 4; index++) {
-        int digit = hex_value(cursor[index]);
-        if (digit < 0 || cursor[index] == '\0') return 0;
-        value = (value << 4) | (unsigned long)digit;
-    }
-    *value_out = value;
-    return 1;
-}
-
-static size_t append_utf8(char *output, size_t used, unsigned long code_point) {
-    if (code_point <= 0x7F) {
-        output[used] = (char)code_point;
-        return used + 1;
-    }
-    if (code_point <= 0x7FF) {
-        output[used] = (char)(0xC0 | (code_point >> 6));
-        output[used + 1] = (char)(0x80 | (code_point & 0x3F));
-        return used + 2;
-    }
-    if (code_point <= 0xFFFF) {
-        output[used] = (char)(0xE0 | (code_point >> 12));
-        output[used + 1] = (char)(0x80 | ((code_point >> 6) & 0x3F));
-        output[used + 2] = (char)(0x80 | (code_point & 0x3F));
-        return used + 3;
-    }
-    output[used] = (char)(0xF0 | (code_point >> 18));
-    output[used + 1] = (char)(0x80 | ((code_point >> 12) & 0x3F));
-    output[used + 2] = (char)(0x80 | ((code_point >> 6) & 0x3F));
-    output[used + 3] = (char)(0x80 | (code_point & 0x3F));
-    return used + 4;
-}
-
-static int decode_string(const char **cursor_ref, char *output,
-                         size_t *used_ref, workspace_store_result *status) {
-    const char *cursor = *cursor_ref;
-    size_t used = *used_ref;
-
-    cursor++;
-    while (*cursor != '\0' && *cursor != '"') {
-        if (*cursor != '\\') {
-            output[used++] = *cursor++;
-            continue;
-        }
-        cursor++;
-        switch (*cursor) {
-            case '"':
-            case '\\':
-            case '/':
-                output[used++] = *cursor++;
-                break;
-            case 'b':
-                output[used++] = '\b';
-                cursor++;
-                break;
-            case 'f':
-                output[used++] = '\f';
-                cursor++;
-                break;
-            case 'n':
-                output[used++] = '\n';
-                cursor++;
-                break;
-            case 'r':
-                output[used++] = '\r';
-                cursor++;
-                break;
-            case 't':
-                output[used++] = '\t';
-                cursor++;
-                break;
-            case 'u': {
-                unsigned long code_point = 0;
-                if (!read_hex4(cursor + 1, &code_point)) {
-                    *status = WORKSPACE_STORE_ERR_ARGUMENT;
-                    return 0;
-                }
-                cursor += 5;
-                if (code_point >= 0xD800 && code_point <= 0xDBFF &&
-                    cursor[0] == '\\' && cursor[1] == 'u') {
-                    unsigned long low = 0;
-                    if (read_hex4(cursor + 2, &low) && low >= 0xDC00 && low <= 0xDFFF) {
-                        code_point = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
-                        cursor += 6;
-                    }
-                }
-                used = append_utf8(output, used, code_point);
-                break;
-            }
-            default:
-                *status = WORKSPACE_STORE_ERR_ARGUMENT;
-                return 0;
-        }
-    }
-    if (*cursor != '"') {
-        *status = WORKSPACE_STORE_ERR_ARGUMENT;
-        return 0;
-    }
-    cursor++;
-    *cursor_ref = cursor;
-    *used_ref = used;
-    return 1;
-}
-
-/*
- * Validates the {"path":...,"data":...} shape structurally and returns the
- * unescaped data string, or NULL with *error_set holding the protocol code
- * the binding should report.
- */
 char *workspace_store_decode_argument(const char *request,
                                       workspace_store_result *result) {
-    workspace_store_result status = WORKSPACE_STORE_OK;
-    const char *cursor = request;
-    char *output = NULL;
-    size_t capacity;
-    size_t used = 0;
+    json_result status;
+    char *values[1] = {NULL};
 
-    if (request == NULL) {
-        status = WORKSPACE_STORE_ERR_NULL;
-        goto done;
-    }
-
-    capacity = strlen(request) + 1;
-    output = malloc(capacity);
-    if (output == NULL) {
-        status = WORKSPACE_STORE_ERR_OUT_OF_MEMORY;
-        goto done;
-    }
-
-    skip_whitespace(&cursor);
-    if (*cursor != '[') {
-        status = WORKSPACE_STORE_ERR_ARGUMENT;
-        goto done;
-    }
-    cursor++;
-    skip_whitespace(&cursor);
-    if (*cursor != '"') {
-        status = WORKSPACE_STORE_ERR_ARGUMENT;
-        goto done;
-    }
-    if (!decode_string(&cursor, output, &used, &status)) goto done;
-
-    skip_whitespace(&cursor);
-    if (*cursor != ']') {
-        status = WORKSPACE_STORE_ERR_ARGUMENT;
-        goto done;
-    }
-    cursor++;
-    skip_whitespace(&cursor);
-    if (*cursor != '\0') {
-        status = WORKSPACE_STORE_ERR_ARGUMENT;
-        goto done;
-    }
-
-    output[used] = '\0';
-
-done:
-    store_result_set(result, status);
-    if (status != WORKSPACE_STORE_OK) {
-        free(output);
+    status = json_read_string_array(request, 1, values, NULL);
+    if (status == JSON_ERR_NULL) {
+        store_result_set(result, WORKSPACE_STORE_ERR_NULL);
         return NULL;
     }
-    return output;
+    if (status == JSON_ERR_MEMORY) {
+        store_result_set(result, WORKSPACE_STORE_ERR_OUT_OF_MEMORY);
+        return NULL;
+    }
+    if (status != JSON_OK) {
+        store_result_set(result, WORKSPACE_STORE_ERR_ARGUMENT);
+        return NULL;
+    }
+
+    store_result_set(result, WORKSPACE_STORE_OK);
+    return values[0];
 }

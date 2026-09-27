@@ -26,8 +26,7 @@ items can link to PDF pages and attached images, and a restart restores the
 last view, outline, buffer, and reading position.
 
 The native `summarize` binding is still registered by the C host and covered by
-the bridge tests, but the current UI no longer renders the metrics form; the
-frontend keeps its parsing helpers in `src/metrics-ui.js` for later reuse.
+the bridge tests, but the current UI no longer renders the metrics form.
 
 ## Scope
 

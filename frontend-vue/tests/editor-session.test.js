@@ -10,7 +10,10 @@ import {
   cursorPosition,
   editorContent,
   editorInput,
+  editorNotice,
+  editorNoticeError,
   editorWordCount,
+  setEditorNotice,
   updateCursor,
 } from '../src/editor-session.js';
 
@@ -62,4 +65,17 @@ test('a missing selectionStart is treated as the start of the text', () => {
   updateCursor();
   assert.equal(cursorPosition.value, 'Line 1, Col 1');
   editorInput.value = null;
+});
+
+test('the import/export notice is set, styled, and cleared', () => {
+  setEditorNotice('Saved to /tmp/notes.txt.');
+  assert.equal(editorNotice.value, 'Saved to /tmp/notes.txt.');
+  assert.equal(editorNoticeError.value, false);
+
+  setEditorNotice('The file could not be read.', true);
+  assert.equal(editorNoticeError.value, true);
+
+  setEditorNotice('');
+  assert.equal(editorNotice.value, '');
+  assert.equal(editorNoticeError.value, false);
 });

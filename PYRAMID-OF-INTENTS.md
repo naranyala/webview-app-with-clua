@@ -63,6 +63,18 @@ another (an outline item pointing at a PDF page or an attached image).
 cross-tool state, and a user can move from outline to source document and back
 without re-declaring or re-losing anything.
 
+### I1.6 — Add an OpenStreetMap explorer as a fifth tool
+
+The fifth grid card opens a map: pan-and-zoom raster tiles, a basemap
+switcher, place search, current-location lookup, and named bookmarks that
+survive a restart. The WebView page cannot reach tile servers itself, so
+tiles, search, and geolocation arrive through narrow native bindings that
+fetch over allowlisted HTTPS, rate-limit, and cache on disk.
+
+**Success looks like:** a user opens the explorer, pans to a place, searches
+for it, bookmarks it, and finds both the bookmark and the last position after
+a restart — with attribution and usage-policy limits visible in the docs.
+
 ## I2 — User intents
 
 ### I2.1 — A user can calculate metrics from the desktop UI
@@ -156,7 +168,9 @@ Known gaps:
 
 - Full Lua test execution depends on installed Lua development metadata.
 - The frontend has build/format checks but no browser behavior test runner.
-- The desktop frontend-to-C path lacks an automated GUI smoke test.
+- The desktop frontend-to-C path is covered by a GUI smoke test
+  (`make smoke-test`), but it only runs where a graphical session exists; CI
+  has no workflow for it yet.
 - Bridge output is structured, but response-buffer truncation and frontend
   component-level interaction coverage still require explicit tests.
 - The desktop build fetches WebView through CMake on first use.

@@ -108,3 +108,33 @@ test('runNativeCall keeps a host rejection shape so reports keep their code', as
   const resolvedError = await runNativeCall(async () => hostError);
   assert.deepEqual(resolvedError, hostError);
 });
+
+test('binding arguments are forwarded on both paths', () => {
+  const directArgs = [];
+  globalThis.window = {
+    saveTextFile: (...args) => {
+      directArgs.push(args);
+      return 'direct-saved';
+    },
+  };
+  const direct = getNativeBinding('saveTextFile');
+  assert.equal(direct('outline.json', '{"a":1}'), 'direct-saved');
+  assert.deepEqual(directArgs, [['outline.json', '{"a":1}']]);
+
+  const bridgeArgs = [];
+  globalThis.window = {
+    __webview__: {
+      call: (...args) => {
+        bridgeArgs.push(args);
+        return 'bridge-saved';
+      },
+    },
+  };
+  const bridged = getNativeBinding('saveTextFile');
+  assert.equal(bridged('outline.json', '{"a":1}'), 'bridge-saved');
+  assert.deepEqual(bridgeArgs, [['saveTextFile', 'outline.json', '{"a":1}']]);
+
+  // Zero-argument calls keep working after the forwarding change.
+  globalThis.window = { openPdf: () => 'opened' };
+  assert.equal(getNativeBinding('openPdf')(), 'opened');
+});

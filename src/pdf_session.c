@@ -8,6 +8,8 @@
 
 #include "pdf_session.h"
 
+#include "json_io.h"
+
 #include "pdf_toc.h"
 
 #include <gtk/gtk.h>
@@ -100,18 +102,15 @@ static const picker_filter pdf_picker_filter = {
  */
 static void show_pdf_picker(webview_t view, void *argument) {
     picker_request *request = argument;
-    char *selected_path = run_path_chooser(view, PICKER_OPEN_FILE, "Open PDF", &pdf_picker_filter);
+    char *selected_path = run_path_chooser(view, PICKER_OPEN_FILE, "Open PDF", &pdf_picker_filter, NULL);
     long long size = 0;
     char *file_name = NULL;
     char *file_contents = NULL;
     gsize file_length = 0;
     char *fingerprint = NULL;
     char *data_url = NULL;
-    char *escaped_name = NULL;
-    char *escaped_url = NULL;
     char *url = NULL;
-    char *response = NULL;
-    size_t response_capacity;
+    GString *response = NULL;
 
     if (selected_path == NULL) {
         char canceled[] = "{\"canceled\":true}";
@@ -147,9 +146,7 @@ static void show_pdf_picker(webview_t view, void *argument) {
             g_free(encoded);
         }
     }
-    response_capacity = (size_t)PATH_MAX * 4 + 1024;
-    if (data_url != NULL) response_capacity += strlen(data_url);
-    response = calloc(response_capacity, 1);
+    response = g_string_new(NULL);
     if (response == NULL) {
         return_native_error(view, request->request_id, "INTERNAL_ERROR",
             "The selected PDF could not be prepared for rendering.");
@@ -162,18 +159,21 @@ static void show_pdf_picker(webview_t view, void *argument) {
     app->pdf_path = g_strdup(selected_path);
     app->pdf_id = g_strdup(fingerprint);
     app->pdf_fingerprint = g_strdup(fingerprint);
-    escaped_name = g_strdup(json_escape(file_name));
-    escaped_url = g_strdup(json_escape(url));
-    if (escaped_name == NULL || escaped_url == NULL) {
-        return_native_error(view, request->request_id, "INTERNAL_ERROR",
-            "The PDF selection could not be prepared.");
-        goto cleanup;
-    }
-
-    snprintf(response, response_capacity,
-        "{\"name\":\"%s\",\"size\":%lld,\"url\":\"%s\",\"dataUrl\":\"%s\",\"documentId\":\"%s\"}",
-        escaped_name, size, escaped_url, data_url ? data_url : "", fingerprint);
-    webview_return(view, request->request_id, 0, response);
+    /*
+     * Built with the shared JSON writer into a growable buffer: the old
+     * snprintf into a fixed buffer could deliver a truncated body with status
+     * 0, and its 4 KiB escaper could silently cut a long file:// URL.
+     */
+    g_string_append(response, "{\"name\":");
+    json_append_string(response, file_name);
+    g_string_append_printf(response, ",\"size\":%lld,\"url\":", size);
+    json_append_string(response, url);
+    g_string_append(response, ",\"dataUrl\":");
+    json_append_string(response, data_url != NULL ? data_url : "");
+    g_string_append(response, ",\"documentId\":");
+    json_append_string(response, fingerprint);
+    g_string_append_c(response, '}');
+    webview_return(view, request->request_id, 0, response->str);
 
 cleanup:
     free(selected_path);
@@ -181,12 +181,9 @@ cleanup:
     g_free(file_contents);
     g_free(data_url);
     g_free(fingerprint);
-    free(escaped_name);
-    free(escaped_url);
     free(url);
-    free(response);
-    free(request->request_id);
-    free(request);
+    if (response != NULL) g_string_free(response, TRUE);
+    picker_request_release(request);
 }
 
 void on_open_pdf(const char *id, const char *request, void *argument) {
@@ -223,10 +220,9 @@ static gpointer extract_pdf_toc_worker(gpointer argument) {
     delivery->view = task->view;
     delivery->request_id = g_strdup(task->request_id);
     if (task->error != NULL) {
-        /* append_json_string keeps this off the shared json_escape buffer. */
-        GString *response = g_string_new("{\"error\":{\"code\":\"TOC_EXTRACTION_FAILED\",\"message\":");
-        append_json_string(response, task->error->message);
-        g_string_append(response, "}}");
+        /* Same error shape as every other binding, written by the codec. */
+        GString *response = g_string_new(NULL);
+        json_append_error(response, "TOC_EXTRACTION_FAILED", task->error->message);
         delivery->response = g_string_free(response, FALSE);
     } else {
         delivery->response = build_toc_response(&task->pdf, &task->toc, cached);

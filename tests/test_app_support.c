@@ -1,6 +1,7 @@
 /*
- * Unit tests for app_support.c: file URL building, JSON escaping, the shared
- * {"error":{code,message}} reply, and picker dispatch.
+ * Unit tests for app_support.c: file URL building, the shared
+ * {"error":{code,message}} reply, and picker dispatch. The JSON codec itself is
+ * covered by tests/test_json_io.c.
  *
  * The webview calls are replaced by recording stubs (see tests/stubs/webview),
  * so the failure shape the frontend unwraps is asserted without a GUI. GTK is
@@ -111,57 +112,6 @@ static void test_build_file_url(void) {
 
 /* --- JSON helpers ------------------------------------------------------- */
 
-static void test_json_escape(void) {
-    char long_value[8192];
-    const char *first;
-    const char *second;
-    char copy[64];
-    size_t escaped_length;
-
-    assert_string_equals(json_escape("plain text"), "plain text");
-    assert_string_equals(json_escape("a\"b\\c"), "a\\\"b\\\\c");
-    assert_string_equals(json_escape("line\nbreak"), "line\\u000abreak");
-    assert_string_equals(json_escape("tab\there"), "tab\\u0009here");
-    assert_string_equals(json_escape("caf\xc3\xa9"), "caf\xc3\xa9");
-
-    /* The result lives in one shared buffer: copy it before the next call. */
-    first = json_escape("first");
-    snprintf(copy, sizeof(copy), "%s", first);
-    second = json_escape("second");
-    assert_string_equals(copy, "first");
-    assert_string_equals(second, "second");
-
-    /* Oversized input stops early and still returns a terminated string. */
-    memset(long_value, 'a', sizeof(long_value) - 1);
-    long_value[sizeof(long_value) - 1] = '\0';
-    escaped_length = strlen(json_escape(long_value));
-    assert(escaped_length > 0);
-    assert(escaped_length < 4096);
-}
-
-static void test_append_json_string(void) {
-    GString *output = g_string_new(NULL);
-
-    append_json_string(output, "plain");
-    assert_string_equals(output->str, "\"plain\"");
-
-    g_string_truncate(output, 0);
-    append_json_string(output, "a\"b\\c\nd\te\x01" "f");
-    assert_string_equals(output->str, "\"a\\\"b\\\\c\\nd\\te\\u0001f\"");
-
-    g_string_truncate(output, 0);
-    append_json_string(output, "caf\xc3\xa9 \xe2\x9c\x93");
-    assert_string_equals(output->str, "\"caf\xc3\xa9 \xe2\x9c\x93\"");
-
-    g_string_truncate(output, 0);
-    append_json_string(output, "");
-    assert_string_equals(output->str, "\"\"");
-
-    g_string_free(output, TRUE);
-}
-
-/* --- shared error replies ----------------------------------------------- */
-
 static void test_return_native_error(void) {
     reset_recordings();
 
@@ -243,8 +193,6 @@ static void test_dispatch_picker(void) {
 
 int main(void) {
     test_build_file_url();
-    test_json_escape();
-    test_append_json_string();
     test_return_native_error();
     test_dispatch_picker();
     return 0;

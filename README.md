@@ -53,6 +53,14 @@ Run the complete frontend, C, Lua, bridge, and sanitizer test suite:
 lua build.lua test
 ```
 
+On a machine with a graphical session, run the desktop smoke test as well: it
+launches the real app in both render modes, checks the rendered shell and the
+real bridge, and exits non-zero if any check fails.
+
+```sh
+make smoke-test        # or: lua build.lua smoke
+```
+
 ## Workspace
 
 - **Text Editor** - drafting column bound to an outline section, with a
@@ -84,26 +92,29 @@ include/workspace_bindings.h   Workspace webview bindings API
 src/metrics.c                  C engine and stable population variance
 src/lua_metrics.c              Lua userdata binding
 lua/native/core.lua            Lua convenience API
+lua/examples/demo.lua          The binding on its own
+lua/examples/ui.lua            The minimal WebView surface (not loaded by the app)
 src/webview_bridge.c           Testable WebView request parser
 src/workspace_store.c          Atomic workspace file store and request decoding
 src/webview_app.c              WebView host entry point and binding registry
-src/app_support.c              Shared JSON, error replies, and GTK path chooser
+src/json_io.c                  The single JSON writer and binding-request reader
+src/app_support.c              Error replies, file URLs, picker dispatch, GTK path chooser
 src/pdf_toc.c                  PDF heading extraction, cache, serialization
 src/pdf_session.c              openPdf and extractPdfToc bindings
 src/image_directory.c          openImageDirectory binding and directory scan
 src/workspace_bindings.c       loadWorkspace and saveWorkspace bindings
 build.lua                      Main project build orchestrator
 frontend-vue/                  Vue desktop frontend and single-file build
-frontend-octane/               Legacy Octane frontend
 tests/test_metrics.c           C engine tests
 tests/test_bridge.c            Bridge parser tests
 tests/test_workspace_store.c   Workspace store tests
 tests/test_core.lua            Lua integration tests
 ```
 
-The canonical desktop UI is `frontend-vue`. `frontend-octane` is retained as a
-legacy frontend. `lua/app/ui.lua` is retained as
-a small Lua-owned HTML example, but it is not used by the CMake desktop target.
+The canonical desktop UI is `frontend-vue`. `lua/examples/ui.lua` is the
+minimal Lua-owned HTML example kept for I1.4 (multiple integration surfaces):
+one page whose button calls the same `window.summarize` binding, loaded by
+nothing. See `lua/examples/README.md`.
 
 ## Architecture at a glance
 
@@ -155,6 +166,9 @@ owns input and presentation; C owns validation, state, and persistence.
 - `make test` requires a discoverable Lua development installation; the C
   core, bridge, workspace store, and sanitizer targets are independent of Lua
   (`make workspace-test` runs the store tests alone).
+- `make smoke-test` needs a graphical session (`DISPLAY` or
+  `WAYLAND_DISPLAY`) and isolates the durable workspace in a temporary
+  directory, so it never touches real data. See `docs/testing.md`.
 
 ## Project direction
 

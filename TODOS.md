@@ -27,15 +27,36 @@ Priority levels:
   compiler/linker metadata, supports `LUA_PKG=...`, and emits targeted setup
   guidance.
 
-### TODO-002 — Add a repeatable desktop smoke test
+### TODO-002 — Add a repeatable desktop smoke test — DONE
 
 - **Intent:** I1.1, I1.2, I2.1, I4.1
 - **Priority:** P0
-- **Work:** Define a smoke-test path that builds the frontend and desktop host,
-  invokes the bridge with representative values, and verifies the displayed
-  summary or the bridge response.
+- **Work:** `METRICS_SMOKE=1` makes the host inject a marker before the page
+  scripts and bind `smokeVerdict`; the bundle then (`frontend-vue/src/smoke.js`)
+  checks the rendered shell and drives the real bridge — `summarize` with
+  representative values and with bad input, `loadWorkspace`, and, when the run
+  is isolated, a `saveWorkspace`/`loadWorkspace` round trip. The verdict is
+  decoded strictly by the host (`src/smoke.c`), printed as one
+  `SMOKE VERDICT` line, and becomes the process exit code, so
+  `scripts/smoke.sh` can run the real application once per render mode
+  (`file://` URL and inline `set_html`) under a timeout and fail loudly. The
+  script builds what is missing, refuses to run without a graphical session,
+  and redirects `XDG_DATA_HOME` into a temporary directory so a smoke run can
+  never read or rewrite a real workspace; `window.__METRICS_SMOKE_WRITABLE__`
+  is what allows the round-trip check at all.
 - **Done when:** CI or a documented local command proves that the actual
-  frontend-to-C path works, not just that each component compiles.
+  frontend-to-C path works, not just that each component compiles, in both
+  render modes.
+- **Evidence:** `make smoke-test` (also `lua build.lua smoke`) reports
+  `checks=5/5` in both modes on a Wayland session; the run is a real
+  fail-detector — an early revision failed with
+  `checks=4/5 failed: dom-anchors (missing …)` and exited 1. The host half is
+  unit tested by `make smoke-unit-test` (`tests/test_smoke.c`: env detection,
+  markers, the strict decoder's malformed-request table, the binding's ack,
+  exit code, and the paths that must not terminate) and the frontend half by
+  `frontend-vue/tests/smoke.test.js` (17 tests with stub bindings, including
+  the missing-host and rejected-verdict paths). Documented in
+  `docs/testing.md` ("Desktop smoke test") and `docs/bridge-protocol.md`.
 
 ### TODO-003 — Keep frontend, bridge, and documentation contracts synchronized — DONE
 
@@ -47,8 +68,9 @@ Priority levels:
 - **Done when:** A contributor can identify one authoritative desktop UI path,
   its request shape, its response shape, and its error behavior.
 - **Evidence:** The contract is documented in `docs/bridge-protocol.md`; the parser is
-  separated into `src/webview_bridge.c`; the desktop build uses the Octane
-  frontend as its authoritative UI.
+  separated into `src/webview_bridge.c`; the desktop build uses `frontend-vue`
+  as its authoritative UI (the Octane UI this entry predates has since been
+  removed).
 
 ## P1 — Make the native boundary dependable
 
@@ -109,8 +131,10 @@ Priority levels:
   `window.summarize`.
 - **Done when:** A frontend test command runs without a desktop WebView and
   verifies the user-visible states.
-- **Evidence:** `frontend-octane/npm test` covers input parsing, bridge error
-  decoding, formatting, and summary rendering through `src/metrics-ui.js`.
+- **Evidence:** At closure, `frontend-octane/npm test` covered input parsing,
+  bridge error decoding, formatting, and summary rendering through
+  `src/metrics-ui.js`. The live suite is now `frontend-vue/npm test`; the
+  legacy UI and its reserved helpers have been removed.
 
 ## P2 — Improve portability and contributor experience
 
@@ -118,10 +142,11 @@ Priority levels:
 
 - **Intent:** I1.3, I2.4, I4.1, I4.3
 - **Priority:** P2
-- **Work:** Run C tests, Lua integration tests, frontend formatting/build, and
-  where practical the desktop compile on supported Linux configurations.
-- **Done when:** Pull requests automatically detect broken contracts or build
-  assumptions.
+- **Work:** Add a GitHub Actions matrix running C tests, sanitizer builds, Lua
+  integration tests, frontend formatting/build/tests, and where GTK/WebKit are
+  available the desktop compile, on supported Linux configurations.
+- **Done when:** Pull requests automatically detect broken native, Lua,
+  frontend, and contract assumptions.
 
 ### TODO-010 — Make dependency acquisition reproducible
 
@@ -136,8 +161,9 @@ Priority levels:
 
 - **Intent:** I0.1, I1.2, I1.3, I4.4
 - **Priority:** P2
-- **Work:** Show the data flow from Octane input to WebView binding to C parser
-  to metrics engine and back to the result view; show Lua as a separate path.
+- **Work:** Show the data flow from desktop UI input to WebView binding to C
+  parser to metrics engine and back to the result view; show Lua as a
+  separate path.
 - **Done when:** The README explains the two consumers of the shared C core in
   one concise diagram or equivalent sequence.
 - **Evidence:** `README.md` now includes the C/Lua/WebView architecture diagram
@@ -177,7 +203,7 @@ Priority levels:
 - **Evidence:** `copyResult()` uses clipboard API with fallback; `exportHistory()`
   creates JSON download; status text shows success/failure feedback.
 
-### TODO-015 — Add a second native capability as a seam-validation exercise
+### TODO-015 — Add a second native capability as a seam-validation exercise — CLOSED
 
 - **Intent:** I0.1, I1.4, I3.1, I4.4
 - **Priority:** P3
@@ -186,6 +212,12 @@ Priority levels:
   contracts remain narrow.
 - **Done when:** The new capability has C tests, Lua coverage, bridge coverage,
   and frontend coverage without duplicating engine ownership logic.
+- **Evidence:** Closed by the second capabilities themselves: `extractPdfToc`,
+  `openImageDirectory`, and the workspace bindings shipped with C tests
+  (`test_pdf_toc`, `test_app_support`, `test_workspace_store`), bridge
+  coverage, and frontend session tests, all through the same narrow seams. The
+  Lua surface intentionally stays metrics-only (I1.4), so the Lua-coverage
+  clause no longer applies.
 
 ## Execution plan — remaining gaps
 
@@ -205,47 +237,29 @@ desktop or CI environment and remains planned rather than implied complete.
 - **Evidence:** `write_summary` and `write_error` now detect `snprintf`
   truncation; bridge tests expect undersized buffers to return failure.
 
-### TODO-017 — Test the actual Octane editor interactions
+### TODO-017 — Test the actual editor interactions in a DOM harness
 
-- **Intent:** I2.1, I2.2, I2.3, I4.1, I4.4
+- **Intent:** I1.5, I4.1, I4.4
 - **Priority:** P1
-- **Work:** Add a DOM-capable test harness for `App.tsrx` covering Run, New,
-  Copy, Help, keyboard submission, loading, bridge success, and bridge failure.
+- **Work:** Add a DOM-capable test harness for `App.vue` (jsdom plus Vue test
+  utilities) covering the editor gate picker, the TOC management actions, view
+  transitions, and native-call success and failure paths.
 - **Done when:** `npm test` exercises the component event paths instead of only
-  testing the pure formatting helpers.
+  asserting static source contracts over the template.
 
-### TODO-018 — Prevent static-shell and Octane-component drift — DONE
+### TODO-018 — Prevent static-shell and component drift — DONE
 
 - **Intent:** I1.2, I1.3, I3.5, I4.4
 - **Priority:** P1
 - **Work:** Define the static HTML shell as a deliberate fallback and add a
   contract test checking that its required IDs, toolbar actions, and editor
-  defaults remain compatible with `App.tsrx`.
+  defaults remain compatible with `App.vue`.
 - **Done when:** A change to either entry point fails a repeatable parity check
   before it can silently break WebView startup.
-- **Evidence:** `tests/static-shell.test.js` checks shared element IDs, CSS
-  classes, ARIA labels, textarea default values, and placeholder text between
-  `public/index.html` and `src/App.tsrx`.
-
-### TODO-019 — Add an end-to-end desktop smoke test
-
-- **Intent:** I1.1, I1.2, I2.1, I4.1
-- **Priority:** P0
-- **Work:** Build the single-file frontend and desktop host, launch it under a
-  supported graphical session, invoke the real bridge, and verify the rendered
-  summary or capture a deterministic WebView callback result.
-- **Done when:** The actual frontend-to-C path is verified in CI or by one
-  documented local command, including the inline and file render modes.
-
-### TODO-020 — Add continuous integration for supported boundaries
-
-- **Intent:** I1.3, I2.4, I4.1, I4.3
-- **Priority:** P2
-- **Work:** Add a GitHub Actions matrix for C tests, sanitizers, Lua tests,
-  frontend check/build/test, and desktop compilation where GTK/WebKit are
-  available.
-- **Done when:** Pull requests automatically detect broken native, Lua,
-  frontend, and contract assumptions.
+- **Evidence:** `frontend-vue/tests/static-shell.test.js` checks shared element
+  IDs, CSS classes, ARIA labels, textarea defaults, and placeholder text
+  between `frontend-vue/public/index.html` and `App.vue` — both under
+  `frontend-vue`, replacing the earlier `public/index.html`/`App.tsrx` pair.
 
 ### TODO-021 — Provide a reproducible Lua development environment
 
@@ -260,8 +274,11 @@ desktop or CI environment and remains planned rather than implied complete.
 
 - **Intent:** I1.3, I3.5, I4.3
 - **Priority:** P2
-- **Work:** Replace the mutable WebView Git tag dependency with an immutable
-  commit or verified archive, and document cache/offline behavior.
+- **Work:** Replace the mutable WebView Git tag dependency in
+  `CMakeLists.txt` (`GIT_TAG 0.12.0`) with the immutable commit for that tag —
+  the local FetchContent clone resolves it to
+  `3ab4b5d722438fc8a13e6ca830c5e2372d19a01d` — and document cache/offline
+  behavior.
 - **Done when:** Repeated clean builds resolve the same WebView source and
   first-run network requirements are explicit.
 
@@ -282,15 +299,23 @@ desktop or CI environment and remains planned rather than implied complete.
   success/failure status while preserving the minimal editor surface.
 - **Done when:** Users can submit with Ctrl/Cmd+Enter and copy a completed
   result without leaving the editor.
-- **Evidence:** `App.tsrx` implements keyboard submission and clipboard/fallback
-  copying; the top toolbar exposes `Copy`.
+- **Evidence:** Delivered at the time by `App.tsrx`: keyboard submission plus
+  clipboard/fallback copying, with the top toolbar exposing `Copy`. That
+  metrics-era editor surface has since been replaced by the workspace editor,
+  and `frontend-vue/tests/static-shell.test.js` now asserts those metric
+  controls are absent; the current low-friction actions are outline
+  prev/next navigation, autosave status, and keyboard image-lightbox controls.
 
 ### TODO-025 — Audit intent and documentation claims after each slice
 
 - **Intent:** I0.1, I1.2, I1.3, I4.4
 - **Priority:** P1
-- **Work:** Remove stale known-gap claims, keep the Octane DSL authoritative in
-  the frontend guide, and record test/build evidence for completed items.
+- **Work:** Remove stale known-gap claims, keep the documentation authoritative
+  for the Vue desktop UI, and record test/build evidence for completed items.
+  Partly done: the frontend guide, README tree, and overview no longer
+  reference the removed legacy UI or the reserved metrics helpers; the Octane
+  claims in `docs/architecture.md`, `docs/overview.md`, `docs/README.md`, and
+  the pyramid's current-state snapshot bullet remain.
 - **Done when:** README, intent pyramid, TODOs, architecture docs, and source
   layout describe the same runtime path.
 
@@ -398,7 +423,7 @@ reference each other's content.
   (34 frontend tests plus C and sanitizer runs), bindings in
   `src/webview_app.c`, and the hydration path in `App.vue`.
 
-### TODO-032 — Add a native recent-document command if URL restore proves unreliable
+### TODO-032 — Add a native recent-document command if URL restore proves unreliable — CLOSED
 
 - **Intent:** I1.2, I3.3, I4.4
 - **Priority:** P3
@@ -409,6 +434,461 @@ reference each other's content.
 - **Done when:** The reader can re-open its last document without user
   interaction, or the TODO is closed with evidence that the frontend path is
   sufficient.
+- **Evidence:** Closed with evidence of sufficiency, not new work: TODO-031
+  proved the frontend path adequate — the reader resumes from its stored
+  `file://` source and degrades to an explicit re-open prompt when the source
+  is unreachable, so no native restore command is needed.
+
+## OpenStreetMap explorer — the fifth grid tool
+
+These items implement **I1.6**: the fifth grid card is a map whose tiles,
+search, and location arrive through narrow native bindings, and whose
+position and bookmarks live in the shared workspace. Planned in full; not yet
+started.
+
+### TODO-034 — Add the map shell as the fifth grid tool
+
+- **Intent:** I1.6, I1.5, I2.5
+- **Priority:** P1
+- **Work:** Add the fifth grid card, the `map` entry in `VIEWS`, and the
+  `.map-app` view with a right-hand rail holding four placeholder tools;
+  wire badge, status, and the workspace restore path, with
+  static-shell and workspace tests.
+- **Done when:** The menu shows five cards, the explorer opens and returns to
+  the menu, the rail buttons report status, and a restart restores the map
+  view.
+
+### TODO-035 — Build the pure native map layer
+
+- **Intent:** I1.6, I3.3, I4.1
+- **Priority:** P1
+- **Work:** Add `src/json_mini.c` (strict reader for untrusted responses) and
+  `src/map_store.c` (layer table, tile URL building, host allowlist, bounds
+  checks, disk-cache read/write/prune, request parsing, response builders)
+  with `tests/test_json_mini.c` and `tests/test_map_store.c`, wired into
+  Makefile, build.lua, and CMake.
+- **Done when:** `make test` and `make sanitized-test` cover URL construction,
+  allowlist rejections (http, userinfo, suffix spoofing), cache pruning, and
+  exact JSON replies without any network access.
+
+### TODO-036 — Fetch tiles and places through a native transport
+
+- **Intent:** I1.6, I1.2, I3.3, I3.4
+- **Priority:** P1
+- **Work:** Add `src/map_session.c`: one persistent worker with a task queue,
+  libcurl (https-only, timeouts, size caps, custom User-Agent), rate floors
+  (≥200 ms tiles, ≥1 s search), Nominatim response reshaping, and the
+  `fetchMapTile` / `searchMapPlaces` bindings; extend the native-bridge
+  helpers to forward arguments; wire CURL into the build with `check-curl`.
+- **Done when:** Warm fetches answer from cache with a `cached` flag, cold
+  fetches return a `dataUrl`, and every failure path (offline, HTTP error,
+  too large, timeout, unknown layer) returns a typed
+  `{error:{code,message}}` — no raw network JSON reaches the page.
+
+### TODO-037 — Render the tile canvas with pan and zoom
+
+- **Intent:** I1.6, I2.5, I4.1
+- **Priority:** P1
+- **Work:** Add `map-tiles.js` (pure mercator math: visible tiles, x wrap,
+  y clamp, zoom bounds), the tile lifecycle in `map-session.js` (in-flight
+  dedupe, error tiles, LRU), pointer drag pan and wheel zoom in `App.vue`,
+  and the attribution footer.
+- **Done when:** Tiles render as data URLs, panning across the antimeridian
+  and clamped latitudes stays coherent at every supported zoom, and the math
+  is covered by `tests/map-tiles.test.js`.
+
+### TODO-038 — Wire the Layers and Search rail tools
+
+- **Intent:** I1.6, I1.2, I4.1
+- **Priority:** P1
+- **Work:** Layers panel (three basemaps, attribution swap, persistence) and
+  search panel (600 ms debounce, single-flight, stale-response guard →
+  `searchMapPlaces`, jump to result), each with busy, empty, and error
+  status.
+- **Done when:** Switching layers re-tiles while reusing the native cache,
+  search results move the map, and every state is distinguishable in the UI
+  and covered by `tests/map-session.test.js`.
+
+### TODO-039 — Wire Locate and bookmarks
+
+- **Intent:** I1.6, I2.5, I3.4
+- **Priority:** P2
+- **Work:** Add the `locateMapPlace` binding (GeoClue2 over the system bus,
+  bounded wait, `LOCATE_UNAVAILABLE` / `LOCATE_DENIED` / `LOCATE_TIMEOUT`
+  graceful errors) and bookmark add/jump/remove persisted in `workspace.map`
+  with normalization (unknown layer → `osm`, zoom clamp, malformed entries
+  dropped, cap 200).
+- **Done when:** Locate centers the map where the daemon and agent exist and
+  degrades to a precise message where they do not; bookmarks and the last
+  center/zoom/layer survive a restart; `tests/workspace.test.js` covers the
+  map schema round-trip.
+
+### TODO-040 — Document map sources, limits, and the fifth tool
+
+- **Intent:** I1.6, I4.4, I4.3
+- **Priority:** P2
+- **Work:** Add `docs/map-sources.md` (layer table, host allowlist, rate
+  floors, attribution, OSM tile-usage policy and the Nominatim contact-email
+  TODO), document the three bindings in `docs/bridge-protocol.md`, and update
+  `docs/frontend.md`, `docs/testing.md`, `docs/overview.md`, and `README.md`
+  so no page still claims the workspace has four tools.
+- **Done when:** A contributor can find the hosts, limits, and attribution
+  requirements in one document, and every doc agrees with the five-tool UI.
+
+### TODO-041 — Keep tile usage within policy headroom
+
+- **Intent:** I1.3, I4.3
+- **Priority:** P3
+- **Work:** Make the inter-request rate floor configurable and document an
+  escape hatch (app-provided or local tile source such as MBTiles) if demand
+  ever exceeds third-party raster policy.
+- **Done when:** The default remains policy-safe, and the alternative path is
+  documented rather than implied to be unlimited.
+
+## Editor and outline management UX
+
+These items round out the writing flow inside **I1.5**: the editor always
+knows which section is being written, and the TOC Manager manages the outline
+from one surface.
+
+### TODO-042 — Gate the Text Editor behind a picked outline section — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P1
+- **Work:** Opening the editor with no resolvable active outline item shows a
+  section picker (`.toc-pick`) instead of the textarea: pick a declared item
+  to load its draft, or jump to the TOC Manager to declare the first one.
+  Keyed off `activeTocItem`, so stale ids from old snapshots also gate.
+- **Done when:** Every draft belongs to a declared section; the empty-outline
+  path routes to the declare flow; boot restore on the editor view degrades to
+  the picker when the section no longer exists.
+- **Evidence:** `tests/static-shell.test.js` ("Opening the text editor
+  requires a picked outline section"); title/status fallbacks moved to
+  "No section selected" / "Pick a section to start writing".
+
+### TODO-043 — Rebuild the TOC Manager around one management surface — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P1
+- **Work:** Replace the two-column declare-form layout with a single card:
+  inline create bar (`toc-declare-bar`), inline row editing (title + level
+  with Save/Cancel), move up/down reordering (disabled while filtering or at
+  the ends), immediate removal with an Undo button in the toolbar, and a
+  title filter that appears at eight or more items.
+- **Done when:** Title and level are editable without losing the draft, links,
+  id, or position; order is adjustable; removal is undoable until the next
+  outline mutation; large outlines are filterable.
+- **Evidence:** `tests/toc-outline.test.js` covers inline edit (trim, empty
+  rejection, level clamp, draft/link preservation), reordering bounds and
+  filter guard, undo restore and its invalidation, and filter thresholds;
+  `tests/static-shell.test.js` ("TOC Manager manages the outline from one
+  surface") locks the template and stylesheet contracts.
+
+### TODO-044 — Import and export the outline as JSON through the system picker — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P1
+- **Work:** `Export…` writes the whole outline through the native
+  `saveTextFile` binding (GTK save dialog with overwrite confirmation) as a
+  versioned envelope `{"format":"metrics-toc","version":1,"items":[…]}` with
+  ids omitted; `Import…` reads one via `openTextFile` and appends sections
+  after the existing items with fresh ids (non-destructive), falling back to
+  a hidden `input[type=file]` / anchor download outside the host.
+- **Done when:** Exports round-trip drafts, levels, and links; malformed,
+  wrong-format, wrong-version, and empty files report through the TOC status
+  line without mutating the outline; cancels and native errors are surfaced.
+- **Evidence:** `tests/toc-outline.test.js` (envelope shape, append with
+  fresh ids, round-trip, rejection matrix, save/open outcomes, fallback
+  input), `tests/file-io.test.js` (native branches and browser fallbacks),
+  `tests/static-shell.test.js` ("Import and export actions are wired for the
+  outline and the draft"), and `make text-transfer-test` for the C side.
+
+### TODO-045 — Import and export the active draft through the system picker — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P1
+- **Work:** `Export…` writes the picked section's draft through
+  `saveTextFile` under a sanitized, UTF-8-capped file name derived from the
+  section title; `Import…` reads a text file through `openTextFile` and
+  replaces the buffer, flushing it into the outline item via `syncTocDraft()`
+  so word count and workspace stay in step; feedback shows in a footer
+  notice; both actions are gated on a picked section like the editor itself.
+- **Done when:** The draft, outline item, and persisted workspace agree after
+  an import; exports refuse without a section; cancels, native errors, and
+  browser fallbacks all report without throwing.
+- **Evidence:** `tests/toc-outline.test.js` (replace-and-sync, cancel/error,
+  gate, fallback input, safe export name), `tests/editor-session.test.js`
+  (notice lifecycle), `tests/native-bridge.test.js` (argument forwarding on
+  both host paths), and the static-shell wiring test above.
+
+## Abstraction rework — making the seams real
+
+A full-codebase audit of the three layers (C host, Vue frontend, Lua) found
+that the layering *intent* is already documented and mostly honoured, while
+four concrete abstractions are missing and each one is now a source of
+duplication, untested logic, or silent data loss. These items implement
+**I3.3**, **I3.4**, and **I4.4**; the evidence in each entry is the audit
+finding that justifies the work.
+
+### TODO-046 — Give the C host one JSON codec and one error contract — DONE
+
+- **Intent:** I3.3, I3.4, I4.4
+- **Priority:** P1
+- **Work:** There is no single owner for JSON, so five modules wrote their own
+  (four error writers, three string decoders — `text_transfer.c:18-121` and
+  `workspace_store.c:177-293` are the same ~100 lines twice). Add a
+  webview-free `json_io.h`/`json_io.c` owning `append_json_string`, one
+  `json_read_string()` primitive (escapes, `\uXXXX` with surrogate pairs, an
+  explicit control-byte policy), and one `native_error` enum with
+  `return_native_error`/`native_error_strerror`. Delete `json_escape()` — its
+  shared 4 KiB static buffer silently truncates the PDF URL
+  (`pdf_session.c:165-173` feeds it a `PATH_MAX * 3 + 8` buffer) — and delete
+  the unescaped `return_workspace_error` (`workspace_bindings.c:35-43`), whose
+  doc comment claims a contract the frontend never consumes.
+- **Done when:** every byte the host emits comes from one writer, every
+  request string is read by one reader (so the two grammars can no longer
+  diverge), and `src/pdf_toc.c` compiles without GTK or the webview stub.
+- **Evidence:** `include/json_io.h` + `src/json_io.c` own `json_append_string`,
+  `json_append_error`, and `json_read_string_array()` (measure-then-allocate,
+  so a decoded value is sized exactly and a raw control byte is rejected by
+  every binding alike). `json_escape()` and the unescaped
+  `return_workspace_error` are gone, along with the inline error literals in
+  `webview_app.c` and the clone in `pdf_session.c`; `picker_request_release()`
+  now owns every `picker_request` teardown (2 of 4 sites leaked the payload).
+  `tests/test_json_io.c` (new, `make json-io-test`) covers the writer and the
+  reader, including the malformed table and the surrogate pair. `make test`,
+  `make sanitized-test`, `lua build.lua test`, and `make smoke-test` (5/5 in
+  both render modes) are green; `test_pdf_toc` now links only glib, dropped
+  `-Itests/stubs` and its three hand-written `webview_*` stubs, and
+  `test_bridge`/`test_workspace_store` gained the codec.
+- **Follow-up:** the ~24 code strings are still literals at their call sites.
+  A `native_error` enum plus a docs-vs-source contract test remains open (see
+  TODO-052's test-registry work).
+
+### TODO-047 — Extract the workspace persistence engine out of App.vue — DONE
+
+- **Intent:** I1.5, I2.5, I4.1
+- **Priority:** P1
+- **Work:** `App.vue:229-335` holds the snapshot builder, the 250 ms debounce,
+  the localStorage→native write ordering, and the boot/native `savedAt`
+  reconciliation — and hand-writes a second copy of the workspace schema
+  (`App.vue:229-248` vs `workspace.js:134-151`). Move it into
+  `src/workspace-persistence.js` with injected `workspace`, `storage`,
+  `native`, and `now`, following the injection style `smoke.js` already uses.
+  `persistNow` must return the awaited native result: `persistWorkspace()`
+  returns `true` unconditionally today (`App.vue:280`), so a failed desktop
+  save never reaches `saveTocItems()`'s error branch (`toc-outline.js:141`) —
+  dead code in the shipping configuration.
+- **Done when:** the persistence loop is unit tested with an injected storage
+  and a fake native store, covering the failure path, the debounce, and the
+  `savedAt` tie; the snapshot has exactly one definition; and `App.vue`
+  contains no schema or write-ordering logic.
+- **Evidence:** `frontend-vue/src/workspace-persistence.js` owns the snapshot,
+  `apply`, `persist`, `flush`, `schedule` (250 ms), `hydrate`, the mode, and
+  the header report, with `sessions`, `store`, `boot`, `now`, and `timers`
+  injected. `App.vue` is down to 796 lines and only wires it (plus the one
+  policy decision it must make: a workspace that reached no store at all is
+  also a TOC-level problem). `tests/workspace-persistence.test.js` (22 tests)
+  covers the snapshot, all three write outcomes, the debounce collapse, the
+  four hydration cases, and the report. `saveTocItems()` no longer assigns
+  `tocStatusError = !saved`, which used to clear the error state the async
+  failure callback had just set. 184/184 frontend tests, `npm run build`, and
+  `make smoke-test` (5/5, both modes) are green.
+
+### TODO-048 — Turn the session singletons into factories — DONE
+
+- **Intent:** I4.1, I4.4
+- **Priority:** P2
+- **Work:** ~60 module-level exported `ref`s and 10 module `let`s make the
+  frontend a global singleton: `boot-state.js:10` reads `localStorage` at
+  import time (so every test file transitively touches real storage) and
+  `tests/toc-outline.test.js:8` has to reset shared state by hand. Convert
+  `pdf-session`, `image-session`, `editor-session`, and `toc-outline` to
+  `create*Session(deps)` factories, and route `document`, `window`,
+  `FileReader`, and `URL` through injected seams instead of direct globals.
+  This is the prerequisite for TODO-017.
+- **Done when:** two independent app states can exist in one test process, and
+  no module reaches for a global it was not given.
+- **Evidence:** all five sessions are factories —
+  `createAppShell`, `createEditorSession`, `createImageSession`,
+  `createPdfSession`, `createTocOutline` — each taking what it used to reach
+  for: `boot`, `doc`, `native`, `call`, `defer`, `pixelRatio`, `revokeUrl`,
+  and (for the outline) its editor, PDF, image, and shell collaborators plus the
+  transfer wrappers. `toc-outline.js` no longer imports its siblings; it takes
+  them, defaulting to the app's instances. Each module still creates one
+  default instance at import and re-exports its members, so App.vue and the
+  existing 199 tests are untouched by the refactor.
+  `tests/session-factories.test.js` (12 tests) is the proof: two of each
+  session coexist in one process with separate state, separate statuses, and
+  separate focus targets, and an outline built from stub collaborators declares,
+  reorders, undoes, exports, and enforces the image cap without touching the
+  real sessions. DOM lookups resolve lazily (`doc = null` then
+  `doc ?? globalThis.document`) so a test may install a document after import.
+  211/211 frontend tests, `npm run build`, and `make smoke-test` (5/5, both
+  render modes) are green.
+- **Note:** the default instances are still created at import time, so the
+  modules do hold one instance each. Removing that last step means App.vue
+  builds the graph explicitly; it is only worth doing together with the DOM
+  harness in TODO-017, which can now use these factories.
+
+### TODO-049 — Harden the C host's limits, buffers, and file I/O — DONE
+
+- **Intent:** I3.4, I2.3
+- **Priority:** P1
+- **Work:** Enforce `TEXT_TRANSFER_MAX_BYTES` *before* reading the file into
+  memory (`text_transfer.c:298-313` loads it, then checks); check the
+  `snprintf` return at `pdf_session.c:173`, where an overrun currently
+  delivers a truncated body with status 0; name every remaining magic
+  threshold — `pdf_toc.c:49`'s `180` is compared against `GString.len`, which
+  is bytes, so non-ASCII headings are dropped while the comment claims
+  characters; replace the two hand-rolled whole-file readers
+  (`workspace_store.c:48`, `webview_app.c:133`) with `g_file_get_contents`,
+  used elsewhere in the same codebase; and either `fsync` the workspace temp
+  file and its directory or soften `include/workspace_store.h:44`'s claim that
+  an interrupted write cannot corrupt existing state.
+- **Done when:** no response can be delivered truncated, no size cap is checked
+  after the allocation it bounds, and the durability comment matches the code.
+- **Evidence:** the open-picker path now `g_stat`s before reading, so an
+  oversized file is rejected from its metadata and the post-read check only
+  guards a file that grew in between. The PDF title cap counts UTF-8
+  *characters* (`pdf_toc_count_characters`, new and public so it is testable:
+  `tests/test_pdf_toc.c` asserts 180 three-byte characters are 540 bytes and
+  still 180 characters), and the four heading thresholds are named
+  `PDF_HEADING_*`. `workspace_store_save` now fsyncs the temp file *and* the
+  containing directory, so `include/workspace_store.h`'s durability claim is
+  true of a power loss, not just a process crash. Both hand-rolled whole-file
+  readers (`workspace_store_load`, `load_html`) are gone in favour of
+  `g_file_get_contents`, with `load_html` refusing a bundle containing NUL
+  bytes. The response-truncation hazard in `openPdf` was removed with TODO-046
+  (GString instead of an unchecked `snprintf`). `make test`,
+  `make sanitized-test`, and `make smoke-test` (5/5, both modes) are green.
+
+### TODO-050 — One transfer pipeline and one status channel in the frontend — DONE
+
+- **Intent:** I2.2, I2.5
+- **Priority:** P1
+- **Work:** Six copy-pasted `{error} → {canceled} → success` ladders
+  (`pdf-session.js:289`, `image-session.js:151`, `toc-outline.js:369,397,438,471`)
+  re-implement the contract `file-io.js:8` already states; delete the second
+  native binding resolver (`workspace.js:275` vs `native-bridge.js:15`, which
+  disagree on `globalThis` vs `window`); render the four status channels with
+  one `<StatusLine>`. Two silent-data-loss fixes belong here:
+  `MAX_IMAGES_PER_ITEM` is enforced on read (`workspace.js:59`) but not on
+  write (`toc-outline.js:598` pushes unbounded, so the 65th image link is
+  dropped on the next load), and the browser image path has no total-byte
+  budget, unlike the native scan's 96 MB (`image_directory.c:18`).
+- **Done when:** no transfer path re-implements the ladder, one resolver owns
+  binding lookup, and the browser fallback honours the same budgets as the
+  native scan.
+- **Evidence:** `file-io.js` gained `withFileTransfer()` plus
+  `withTextFileRead()` / `withTextFileWrite()`; all six ladders
+  (`pdf-session.js`, `image-session.js`, and the four TOC/editor transfers)
+  now pass a `report` callback and per-tool `messages`, and the pipeline
+  returns `{ status, value, result }` with `status` in
+  `done | canceled | error | skipped` so callers react without parsing prose.
+  `workspace.js` imports `getNativeBinding` instead of keeping a second
+  resolver that disagreed about `globalThis` vs `window` (its test now
+  installs bindings where the canonical resolver reads them).
+  `MAX_IMAGES_PER_ITEM` is exported from `workspace.js` and enforced by
+  `attachImageToToc()`, which now refuses the 65th link with a message instead
+  of writing a record the next load would silently truncate;
+  `MAX_BROWSER_TOTAL_SIZE` (96 MB) mirrors `IMAGE_SCAN_MAX_TOTAL_SIZE`, and
+  `imagesFromFileList` stops on the same count and byte budget the native scan
+  uses, reporting `skipped` and `totalBytes`. `readFileAsText` prefers a
+  File's own `text()` over FileReader. 199/199 frontend tests (17 of them new:
+  the pipeline's outcome matrix, the attach cap, and the image budget),
+  `npm run check`, `npm run build`, `make test`, `make sanitized-test`,
+  `lua build.lua test`, and `make smoke-test` (5/5, both modes) are green.
+- **Note:** the four status channels are still four hand-written spans. The
+  `<StatusLine>` component is left in TODO-051 with the App.vue split, where
+  it belongs.
+
+### TODO-051 — Break App.vue into child components — PARTIAL
+
+- **Intent:** I4.4
+- **Priority:** P2
+- **Work:** 875 lines with zero child components, 28 `toolbar-button`
+  occurrences, byte-identical word-count lines (`App.vue:597` and `:668`),
+  a duplicated outline `<select>` (`:806`, `:863`), and ~11 hand-rolled
+  pluralizations. Extract one component per tool pane plus the shared
+  toolbar/status/empty-state pieces, and fix the accessibility gaps that fall
+  out: `aria-live` on the interactive TOC `<nav>` (`:789`), no focus
+  trap/restore in the lightbox (`:845-871`), and a keyboard-unreachable PDF
+  scroll region (`:814`).
+- **Done when:** `App.vue` is a composition root of roughly 200 lines and the
+  four panes share one status and toolbar vocabulary.
+- **Shipped:** `src/components/StatusLine.vue` is now the one status line, used
+  by all four panes (the pane-specific class still falls through, so index.css
+  is untouched, while the id/error/title/role/aria-live triple exists once);
+  `src/components/LightboxDialog.vue` took the preview out of App.vue and
+  brought the missing focus behaviour with it — it takes focus on open, keeps
+  Tab inside the dialog, handles Escape, and returns focus to the opener on
+  unmount; `src/components/MenuView.vue` took the four tool cards out, leaving
+  the app's whole routing surface in one readable component. All three
+  accessibility gaps are closed and locked by tests: the TOC `<nav>` is no
+  longer a live region (it wraps the entire interactive outline list), the
+  reader pane is `role="region"` with `tabindex="0"` and a label so it is not
+  mouse-only, and the lightbox restores focus.
+- **Evidence:** four new assertions in `tests/static-shell.test.js` cover the
+  shared status line, the focus trap and restore, the non-live TOC panel, and
+  the keyboard-reachable reader pane; `static-shell.test.js`'s aggregate now
+  follows a concern into `src/components/`. 215/215 frontend tests,
+  `npm run check`, `npm run build`, and `make smoke-test` (5/5, both render
+  modes) are green.
+- **Not done:** the per-pane extraction (TOC Manager, editor, image viewer,
+  reader). App.vue is 791 lines, not ~200. Each of those panes holds 10-20
+  session bindings, so the split is mostly prop plumbing, and the only coverage
+  available for a template of that size is the 5-check smoke run — a
+  regression there would not be caught by a unit test. Doing it properly wants
+  the DOM harness first (TODO-017), which the session factories from TODO-048
+  now make possible; the status and lightbox extractions were taken now because
+  they are the parts with a real defect or duplication behind them.
+
+### TODO-052 — Make one build system the source of truth for tests — DONE
+
+- **Intent:** I1.3, I2.4
+- **Priority:** P2
+- **Work:** `Makefile` (36 test entries), `build.lua` (30, hand-mirrored), and
+  `CMakeLists.txt` (no `enable_testing`/`add_test` at all) each keep their own
+  list; adding `test_smoke.c` meant editing three files, and a forgotten entry
+  is silent non-coverage. Register the C tests with CTest, have `build.lua`
+  delegate rather than re-declare, and keep `make` as the documented entry
+  point. Pairs naturally with TODO-009.
+- **Done when:** adding a C test requires one edit, and `ctest` and
+  `make test` run the same set.
+- **Evidence:** `tests/MANIFEST` lists each suite as
+  `profile | name | source...` and is the only place a suite is declared. The
+  Makefile turns it into real rules with
+  `tools/tests-manifest.awk` (generated into `build/tests.mk` and included, so
+  `make -n` stays readable), `build.lua` reads it in `read_test_manifest()` and
+  runs suites through `run_c_tests()`, and `CMakeLists.txt` reads it under
+  `include(CTest)` to build and register all eight with
+  `add_test(... WORKING_DIRECTORY <source root>)`. A profile (`core`, `glib`,
+  `glib-math`, `pdftotext`, `gtk-stub`) selects the flags, and adding one is
+  three documented edits. The C suite formerly named `smoke` is now
+  `smoke-verdict` (`make smoke-verdict-test`) so its generated target cannot
+  shadow the GUI `make smoke-test`. `make test`, `make c-tests`,
+  `make sanitized-test`, `lua build.lua test`, and `ctest` (8/8) all pass.
+
+### TODO-053 — Move the dead Lua-owned HTML UI into the examples — DONE
+
+- **Intent:** I1.3, I1.4
+- **Priority:** P3
+- **Work:** `lua/app/ui.lua` is a complete second frontend — its own HTML, CSS,
+  JS, and `window.summarize` call — that no build target, test, or run path
+  loads, and that duplicates the bridge contract the Vue frontend owns. Per
+  I1.4 the Lua-owned surface is worth *preserving*, so move it next to
+  `lua/examples/demo.lua` and document it as the minimal bridge example rather
+  than deleting the surface outright.
+- **Done when:** exactly one presentation layer ships in the app path, and the
+  Lua example set still demonstrates the C binding end to end.
+- **Evidence:** `lua/app/ui.lua` moved to `lua/examples/ui.lua` (git mv, so the
+  history follows) and the now-empty `lua/app/` is gone. Per I1.4 the surface
+  is preserved rather than deleted: `lua/examples/README.md` explains that
+  `demo.lua` shows the binding alone and `ui.lua` is the smallest possible
+  WebView page — one button calling the same `window.summarize` binding — with
+  the note that no build target or the desktop app loads it. README, the
+  source-layout list, and the architecture doc point at the new path.
 
 ## Backlog rules
 
@@ -417,3 +897,5 @@ reference each other's content.
 - Update the intent pyramid when the product boundary or architecture changes.
 - Close a TODO only with evidence: a test, build result, documented manual
   check, or an explicit reason the intent no longer applies.
+- Use `— DONE` when the work shipped with evidence, and `— CLOSED` when it no
+  longer applies and the reason is recorded.

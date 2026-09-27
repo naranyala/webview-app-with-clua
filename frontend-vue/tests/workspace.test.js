@@ -39,22 +39,24 @@ function fakeStorage(initial = {}) {
 
 const NATIVE_COMMANDS = ['loadWorkspace', 'saveWorkspace'];
 
+/*
+ * Installs the store bindings on the same global the canonical resolver reads
+ * (native-bridge.js looks at window), so this suite exercises the real lookup
+ * path instead of a private one.
+ */
 async function withNativeBindings(bindings, run) {
-  const saved = {};
+  const hadWindow = Object.hasOwn(globalThis, 'window');
+  const originalWindow = globalThis.window;
+  globalThis.window = { ...(originalWindow ?? {}) };
   for (const name of NATIVE_COMMANDS) {
-    saved[name] = Object.hasOwn(globalThis, name)
-      ? globalThis[name]
-      : undefined;
-    if (typeof bindings[name] === 'function') globalThis[name] = bindings[name];
-    else delete globalThis[name];
+    if (typeof bindings[name] === 'function')
+      globalThis.window[name] = bindings[name];
   }
   try {
     await run();
   } finally {
-    for (const name of NATIVE_COMMANDS) {
-      if (saved[name] === undefined) delete globalThis[name];
-      else globalThis[name] = saved[name];
-    }
+    if (hadWindow) globalThis.window = originalWindow;
+    else delete globalThis.window;
   }
 }
 

@@ -84,7 +84,53 @@ Run:
 make pdf-toc-test
 ```
 
-The sanitized target rebuilds all five C test binaries with
+### Text transfer tests
+
+[`tests/test_text_transfer.c`](../tests/test_text_transfer.c) covers the
+`openTextFile` / `saveTextFile` plumbing without a GUI: the save argument
+decoder (escapes, surrogate pairs, whitespace, malformed and oversized
+requests), the suggested-name sanitizer (path stripping, reserved characters,
+fallbacks, UTF-8-safe caps), and the binding-level validation that rejects a
+bad request before any dialog opens while a good one dispatches with its
+payload attached. The webview calls are recorded by the same stubs as the
+host plumbing tests.
+
+Run:
+
+```sh
+make text-transfer-test
+```
+
+### JSON codec tests
+
+[`tests/test_json_io.c`](../tests/test_json_io.c) covers the host's single
+JSON codec: the writer (escaping, error documents, no size limit) and the
+reader (escapes, `\uXXXX` with surrogate pairs, exact allocations, raw control
+bytes rejected, and a table of malformed requests). Every binding decodes
+through it, so this is where the shared grammar is pinned.
+
+Run:
+
+```sh
+make json-io-test
+```
+
+### Smoke verdict tests
+
+[`tests/test_smoke.c`](../tests/test_smoke.c) covers the smoke-run plumbing:
+`METRICS_SMOKE` and `XDG_DATA_HOME` detection (including `0` and empty values),
+the read-only and writable init markers, the strict verdict decoder (valid
+flags, whitespace, and a table of malformed requests), and the `smokeVerdict`
+binding itself (ack, recorded exit code, loop termination, and the paths that
+must *not* terminate).
+
+Run:
+
+```sh
+make smoke-unit-test
+```
+
+The sanitized target rebuilds all seven C test binaries with
 AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ### Lua integration tests
@@ -114,14 +160,17 @@ leak detection enabled when the environment supports it.
 
 ### Frontend checks
 
-The frontend has pure behavior tests for input parsing, bridge error decoding,
-number formatting, and result rendering, plus one file per session module
-(`native-bridge`, `workspace-report`, `app-shell`, `editor-session`,
-`pdf-session`, `image-session`, `toc-outline`) covering the state those modules
-own: native call decoding, persistence reports, view cleanup, outline sync,
-page navigation and scroll math, image grouping and the lightbox, and heading
-import. Static contract tests cover the template, the stylesheet, the build
-config, and the native host; `template-bindings.test.js` compiles `App.vue`
+The frontend has one file per session module (`native-bridge`, `file-io`, `workspace-persistence`,
+`workspace-report`, `app-shell`, `editor-session`, `pdf-session`,
+`image-session`, `toc-outline`) covering the state those modules own: native
+call decoding and argument forwarding, system-picker transfers with their
+browser fallbacks and one shared outcome pipeline, the persistence engine
+(snapshot, write order, debounce, hydration), persistence reports, view cleanup, outline sync, page
+navigation and scroll math, image grouping and the lightbox, heading
+import, outline editing, and outline/draft import-export. Static contract
+tests cover the template, the stylesheet,
+the build config, and the native host; `template-bindings.test.js` compiles
+`App.vue`
 with Vue's compiler and fails when the template references a name the script
 setup does not bind. They run without a browser or WebView:
 
@@ -133,6 +182,37 @@ npm run build
 ```
 
 The native bridge itself remains covered by `make bridge-test`.
+
+## Desktop smoke test
+
+The unit tests prove each piece; the smoke test proves the wiring. It builds
+the frontend and the desktop host, launches the real application in a real
+graphical session once per render mode (`file://` URL and inline `set_html`),
+and lets the frontend check the real DOM and the real bindings:
+
+- the shell rendered (root shell, all four tool panes, the editor gate, four
+  menu cards),
+- `summarize` with representative values returns a summary, and bad input
+  returns the shared error shape,
+- `loadWorkspace` answers `{ok, workspace}`,
+- and, when the run is isolated, a `saveWorkspace` probe survives a reload.
+
+The frontend sends one verdict to the `smokeVerdict` binding, which prints a
+single `SMOKE VERDICT` line and becomes the process exit code — so a green run
+is the app's own answer, not a log grep. `METRICS_SMOKE=1` is what activates
+all of this; without it nothing is bound and the page is untouched.
+
+```sh
+make smoke-test        # or: lua build.lua smoke
+```
+
+The run needs `DISPLAY` or `WAYLAND_DISPLAY` and redirects `XDG_DATA_HOME`
+into a temporary directory, so it never reads or rewrites a real workspace.
+`SMOKE_SKIP_BUILD=1` reuses the existing artifacts and `SMOKE_TIMEOUT` (60s
+by default) bounds each mode; a mode that never reports fails on the timeout.
+Logs land in `build/smoke/`. The checks themselves are unit tested in
+[`tests/smoke.test.js`](../frontend-vue/tests/smoke.test.js) with stub
+bindings, and the host half in `tests/test_smoke.c`.
 
 ## Full local verification
 
@@ -155,12 +235,17 @@ For the complete desktop path, also run:
 lua build.lua desktop
 ```
 
-Then enter valid, invalid, empty, and very large values in the UI.
+Then enter valid, invalid, empty, and very large values in the UI, and run the
+GUI smoke test on a machine with a graphical session:
+
+```sh
+make smoke-test
+```
 
 ## Test design principles
 
 - Test public contracts, not private implementation details.
 - Check that rejected input leaves engine state unchanged.
 - Include boundary values and malformed protocol input.
-- Keep C and bridge tests runnable without a GUI.
-- Treat the frontend-to-native smoke path as separate from unit tests.
+- Keep C and bridge tests runnable without a GUI, and keep the GUI smoke test
+  as the one place that needs a session.
