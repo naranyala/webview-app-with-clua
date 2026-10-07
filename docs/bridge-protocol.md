@@ -1,29 +1,68 @@
 # WebView bridge protocol
 
-The desktop frontend communicates with native code through the WebView binding
-named `summarize`.
+The desktop host registers **14 bindings**. This document is their contract: what
+each one accepts, what it returns, and how it fails. `src/webview_app.c` is
+authoritative for the registered set, and `frontend-vue/tests/bridge-bindings.test.js`
+checks the two against each other in both directions — a binding that ships
+undocumented fails the suite, and so does a documented binding the host never
+registers.
+
+## The bindings at a glance
+
+| Group | Bindings |
+| --- | --- |
+| Metrics | `summarize` |
+| PDF | `openPdf`, `openPdfAt`, `extractPdfToc` |
+| Images | `openImageDirectory`, `openImageDirectoryAt`, `loadImageAt` |
+| Outline PDF | `chooseOutlineDirectory`, `renderOutlinePdf` |
+| Text | `openTextFile`, `saveTextFile` |
+| Workspace | `loadWorkspace`, `saveWorkspace` |
+| Smoke only | `smokeVerdict` — absent unless `METRICS_SMOKE=1` |
 
 ## JavaScript API
+
+Every binding is a promise-returning function on `window`. The canonical example:
 
 ```js
 const summary = await window.summarize([12.5, 15, 8.5, 14]);
 ```
 
-The frontend converts its text input into an array of finite JavaScript
-numbers before calling the bridge. Numbers can be separated by commas or
-newlines. It normally calls `window.summarize`; for older WebKit runtimes
-where the convenience property is not installed, it can use the equivalent
-internal `window.__webview__.call('summarize', values)` path.
+The frontend converts its text input into an array of finite JavaScript numbers
+before calling the bridge; numbers may be separated by commas or newlines.
 
 ## Bridge detection
 
-The frontend detects the bridge using this priority:
+There is no `summarize`-specific detection. Every binding is reached the same way,
+through `getNativeBinding(name)` in
+[`native-bridge.js`](../frontend-vue/src/native-bridge.js):
 
-1. `window.summarize` - Direct binding from webview library (preferred)
-2. `window.__webview__.call('summarize', values)` - Alternative binding
+1. If `window[name]` is a function, call it directly.
+2. Otherwise, if `window.__webview__.call` exists, use
+   `window.__webview__.call(name, ...args)` — the older WebKit shape, where the
+   host installs a bridge rather than individual properties.
+3. Otherwise there is no host, and the function returns `null`.
 
-If neither is available, the UI displays an error indicating the desktop app
-is required for calculations.
+Arguments are forwarded verbatim on both paths, so a parameterized binding
+(`saveWorkspace`, `saveTextFile`) and a plain one (`openPdf`) are called
+identically and callers never branch on which shape they got.
+
+When a binding resolves to `null`, the frontend does **not** treat that as a
+crash. It reports that the desktop app is required, and the file-picking flows
+fall back to a browser `<input type="file">` where one makes sense — which is why
+`npm run dev` is a usable no-host path at all.
+
+## One call, one normalized outcome
+
+Callers never see a rejected promise. `runNativeCall(call)` wraps every native
+call and returns either the host's payload or `{ error: { code, message } }`, so
+the whole frontend branches on `result.error` and nothing needs a `try`/`catch`
+around a bridge call.
+
+A rejection shaped like the host's own `{ error: { code, message } }` keeps both
+fields, so a specific `code` survives into the pane's status line. Anything else
+— a throw with no message, a string, a non-object response — is reduced to a
+`{ message }` the UI can still display. A binding that cannot answer never fails
+silently and never leaves a caller holding an `undefined`.
 
 ## PDF picker
 
@@ -80,10 +119,64 @@ const folder = await window.openImageDirectory();
 ```
 
 It opens the same chooser in `PICKER_SELECT_FOLDER` mode, scans the folder for
-images within the size and count limits, and answers
-`{ "images": [...], "name": "...", "path": "...", "limited": false }` with
-base64 data URLs, or `{ "canceled": true }`. Outside the desktop host the
-frontend uses its own `input[webkitdirectory]` fallback instead.
+images within the size and count limits, and answers:
+
+```json
+{
+  "images": [
+    {
+      "name": "IMG_0001.jpg",
+      "relativePath": "trip/day1/IMG_0001.jpg",
+      "path": "/home/u/photos/trip/day1/IMG_0001.jpg",
+      "mime": "image/jpeg",
+      "thumbnail": "data:image/jpeg;base64,...",
+      "width": 320,
+      "height": 240,
+      "size": 329152
+    }
+  ],
+  "name": "photos",
+  "path": "/home/u/photos",
+  "limited": false,
+  "fallbacks": 0
+}
+```
+
+or `{ "canceled": true }`. Outside the desktop host the frontend uses its own
+`input[webkitdirectory]` fallback instead.
+
+Three fields earn their place:
+
+- **`thumbnail` is a downscaled copy, not the original.** The grid renders at
+  140px tall, so a 12 MP photo would otherwise be retained in full for the whole
+  session to fill ~187×140 pixels. Base64 also costs 33% over the raw bytes, so
+  the scan's byte budget is a floor on what is allocated rather than a limit on
+  it. Measured: 50 photos at 4032×3024 give a 296 KB reply, against ~20 MB for
+  the originals — 65× smaller.
+- **`path` is what the lightbox asks `loadImageAt` for.** It is the path the scan
+  just read, so it discloses nothing the user did not grant by choosing a folder.
+- **`limited` and `fallbacks` are honesty flags.** `limited` is set when the
+  depth, count, or byte budget stopped the walk; `fallbacks` counts images whose
+  original had to be sent because no thumbnail could be produced. A reply that
+  omitted either would read as complete when it is not, or hide the case that
+  puts the memory back.
+
+### Loading one full-resolution image
+
+`loadImageAt(path)` serves a single image at original resolution for the
+lightbox, which is the only view that shows more than a thumbnail's worth of
+pixels:
+
+```js
+const { dataUrl } = await window.loadImageAt('/home/u/photos/trip/day1/IMG_0001.jpg');
+```
+
+**A path is accepted only if the last scan walked it.** The list is cleared at
+the start of every scan, so this cannot be used to read a file the user never
+named through the folder chooser — without that check the binding would be a
+general file reader reachable from the page, which the rest of the bridge
+deliberately is not. The size is also bounded by the scan's per-file cap, so a
+file that grew since the walk is refused rather than read.
 
 ### Re-opening a remembered directory
 

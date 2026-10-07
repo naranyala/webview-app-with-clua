@@ -8,44 +8,51 @@ application built with Rsbuild.
 ```text
 frontend-vue/
 ├── src/index.js                 Vue root mounting
-├── src/App.vue                  composition: wiring, watchers, persistence, template
+├── src/App.vue                  composition: wiring, watchers, persistence, shell chrome
 ├── src/boot-state.js            one-time boot snapshot of the workspace
 ├── src/native-bridge.js         getNativeBinding / runNativeCall
 ├── src/file-io.js               text file transfer primitives and name suggestions
 ├── src/smoke.js                 desktop smoke checks and the host verdict
 ├── src/workspace-persistence.js snapshot, write order, debounce, hydration
-├── src/workspace-report.js      persistence report -> header sentence
+├── src/workspace-report.js      persistence report -> status-bar sentence
 ├── src/editor-session.js        Text Editor buffer, caret, word count, notice
 ├── src/app-shell.js             active view and transition hooks
 ├── src/pdf-session.js           PDF load, render, paging, path history, heading panel
 ├── src/image-session.js         folder selection, grouping, lightbox
-├── src/map-explorer.js          the map session: view state and interaction
+├── src/google-maps-session.js   the Google viewer: layer, URL parsing, GeoJSON export
 ├── src/map-projection.js        Web Mercator projection, tile grid, layer transform
 ├── src/map-input.js             what a wheel, drag, or key means
 ├── src/map-canvas.js            the canvas tile renderer
+├── src/map-geojson-view.js      loaded layers as drawable shapes, for either renderer
 ├── src/map-places.js            the persisted named-place collection
-├── src/geo.js                   coordinate primitives shared by map and schema
+├── src/map-places-import.js     reading a file of places (GeoJSON or CSV)
+├── src/map-locate.js            the reader's position, and its three failure codes
+├── src/geo.js                   coordinate primitives and point-to-point math
+├── src/csp.js                   the Content-Security-Policy, injected at build time
 ├── src/outline-pdf.js           workspace folder, combine action, generated file
 ├── src/toc-outline.js           outline items and cross-tool links
 ├── src/workspace.js             persistent workspace store and outline schema
-├── src/index.css                workspace layout and visual styling
+├── src/components/              one component per pane, plus the shared pieces
+├── src/styles/                  the stylesheet, split by tool (see src/index.css)
+├── src/index.css                the stylesheet's ordered @import list
 ├── public/index.html            Rsbuild HTML template
 ├── rsbuild.config.js            Vue and single-file setup
-├── plugins/single-file-html.js  removes non-HTML build artifacts
+├── plugins/single-file-html.js  inlines the worker, injects the CSP, drops extra files
 └── tests/                       pure utility and static contract tests
 ```
 
 ## Session modules
 
 `App.vue` is the composition layer: it imports the session modules, owns the
-watchers, the lifecycle hooks, and the persistence loop, and renders the
-template. Everything else lives in one module per concern:
+watchers, the lifecycle hooks, and the persistence loop, and renders the shell
+chrome and the menu. The panes are components (see **UI behavior** below).
+Everything else lives in one module per concern:
 
 | Module | Owns |
 | --- | --- |
 | `boot-state.js` | the single synchronous `loadWorkspace()` read per launch |
 | `native-bridge.js` | resolving and running a host binding (`getNativeBinding`, `runNativeCall`), forwarding arguments on both host paths |
-| `workspace-report.js` | turning a `getWorkspaceReport()` record into the header sentence |
+| `workspace-report.js` | turning a `getWorkspaceReport()` record into the status-bar sentence |
 | `file-io.js` | system-picker-first transfers (`readTextFileNative`, `writeTextFile`), browser fallbacks, `suggestFileName`, and `withFileTransfer` — the one place the success/cancel/error outcomes are handled |
 | `smoke.js` | the `METRICS_SMOKE` checks, their single-line report, and the `smokeVerdict` call; inert without the host marker |
 | `workspace-persistence.js` | the persistence engine: snapshot, `apply`, `persist`, `flush`, `schedule`, `hydrate`, and the mode — every dependency injected |
@@ -53,10 +60,14 @@ template. Everything else lives in one module per concern:
 | `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
 | `pdf-session.js` | document loading, the canvas registry, paging, the remembered-path list, and the heading panel |
 | `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
-| `map-explorer.js` | the session only: the view state, tile loading and zoom commits, pan/zoom and inertia, the pointer, wheel, and keyboard handlers, the view options, and the viewport measurement |
+| `map-explorer.js` | the Explorer's own half: the pin, the status line, the colour filters, flights between places, the saved-place measurements, and the GeoJSON layers. Everything a tiled map does regardless of source lives in `map-viewport.js` |
+| `map-viewport.js` | the map both viewers share: view state, the tile set and the rate floor that gates it, zoom commits, pan/zoom/inertia, the pointer, wheel, and keyboard handlers, and the viewport measurement. Three optional hooks — `onClick`, `onInterrupt`, `onViewMoved` — are how a session supplies the behaviour that genuinely differs, rather than a set of capability flags threaded through the gesture code |
+| `map-locate.js` | `locateViaBrowser()`, returning the three codes TODO-039's native binding will return (`LOCATE_UNAVAILABLE` / `LOCATE_DENIED` / `LOCATE_TIMEOUT`) so the browser path can be replaced by the binding behind one interface. Every dependency injected, so all four paths are testable without a browser and without waiting out the timeout |
+| `map-places-import.js` | reading a file of places, GeoJSON or CSV. Column positions are never guessed: lat/lon are found by header name, because a swapped pair produces a list of plausible places in the wrong hemisphere with no error |
 | `map-projection.js` | the pure geometry - `projectToPixel` / `unprojectFromPixel`, `visibleTiles`, `layerTransform`, `scaleBarFor`, `minimumZoomFor` - plus the tile and zoom constants. No state and no DOM, so the formulas are tested against known slippy-map tile numbers rather than through a session |
 | `map-input.js` | the gesture vocabulary: `classifyWheel`, the click-versus-drag threshold, the flick physics, and the key pan step. Pure functions, so a wheel's intent is testable without a map |
 | `map-canvas.js` | the canvas renderer: the decoded-bitmap cache, the frame coalescing, and the draw. Built from an accessor bundle rather than a session, so it is testable with a plain object and a stub image |
+| `map-geojson-view.js` | `geojsonShapes()`: layers plus a layer transform to circles and paths in viewport pixels. Exists because the overlay used to be reachable only from the canvas renderer, so with the DOM renderer selected an imported FeatureCollection drew nothing while the sidebar reported it as loaded. Both renderers now draw these same shapes, which is what makes the renderer toggle a choice about tiles only |
 | `map-places.js` | the saved-place collection: add, rename, remove, clear, and the inline-edit state — persisted through the workspace schema |
 | `geo.js` | `clampLatitude`, `wrapLongitude`, and `normalizeLocation()`. These live apart from the map so the schema can validate a stored coordinate without importing it; the import would otherwise close a cycle and leave the map's default arguments reading an uninitialised binding |
 | `toc-outline.js` | outline items, linking to pages, images, and places, draft sync, and JSON/text import/export |
@@ -76,9 +87,28 @@ resolves to a script-setup binding.
 
 ## Build behavior
 
-Rsbuild compiles the Vue single-file component, inlines scripts and styles,
+Rsbuild compiles the Vue single-file components, inlines scripts and styles,
 uses one all-in-one chunk, and removes every emitted artifact except
-`dist/index.html`.
+`dist/index.html`. The `@import`s in `src/index.css` are resolved at build time,
+so the shipped document is one file with every rule in it and the split is not
+visible in the artifact.
+
+`src/index.css` is an **ordered import list** over `src/styles/`. The rules are
+unchanged from the 2871-line single file and their order is unchanged: the
+partials are contiguous slices taken at the section headers the old file already
+declared, so cascade behaviour is identical. `tests/static-shell.test.js`
+asserts the import list matches the directory, because a partial added and never
+imported is dead CSS and one imported out of order would quietly change which
+rule wins.
+
+That plugin also injects a **Content-Security-Policy** into the document's head
+(`src/csp.js`, see `docs/map-sources.md`). Two details make it safe to ship: the
+tile-host allowlist is generated from the same constant the map sessions build
+URLs from, so it cannot drift into permitting a host the app does not use or
+blocking one it does; and `script-src` carries a SHA-256 hash of the inline
+bundle rather than `'unsafe-inline'`, because the build inlines the only script
+there is and a policy that blocks it produces an app that never starts.
+`tests/csp.test.js` reads `dist/index.html` back and recomputes that hash.
 
 ```sh
 cd frontend-vue
@@ -93,15 +123,54 @@ resulting `frontend-vue/dist/index.html`.
 
 ## UI behavior
 
-`App.vue` composes the session modules into the welcome menu, writing editor,
-TOC Manager, PDF Reader, PDF metadata, and extracted table of contents. The
-module owns the cross-tool labels (`documentTitle`, `documentStatus`, the four
-menu badges) because each one spans two sessions; every watcher that reacts to
-a change also lives here. Selecting a card changes the active view without
-navigating the WebView.
+`App.vue` is the composition root: it builds the session wiring, the persistence
+engine, and the lifecycle hooks, and it renders the shell chrome and the welcome
+menu. It does **not** hold the panes' markup. Each pane is a component in
+`src/components/` that imports the session modules it reads directly, so a pane
+does not take its state through props from the shell:
+
+| Component | Pane |
+|---|---|
+| `TocPane` | TOC Manager |
+| `EditorPane` | Text Editor, gate and body |
+| `ImagesPane` | Image Viewer |
+| `PdfPane` | PDF Reader |
+| `MapPane` | OpenStreetMap Explorer |
+| `GoogleMapPane` | Google Maps Viewer |
+
+The panes keep their own `v-show`, so switching views still leaves every pane's
+DOM mounted — which is what lets the WebKit repaint watcher and the smoke run find
+their anchors on a fresh boot. Splitting this out does not change that; the
+component's root element *is* the section that used to carry `v-show`.
+
+The shell owns the cross-tool labels (the six menu badges, the workspace
+report) because each one spans two sessions, and every watcher that reacts to a
+change. `EditorPane` is the one pane with a prop: `persistenceMode`, which
+belongs to the engine instance the shell constructs. The *wording* for it is a
+shared pure function (`saveLabelFor`) so the badge and the status bar cannot
+describe the same mode differently.
+
+`tests/template-bindings.test.js` walks the whole component directory rather than
+`App.vue` alone, because a check that catches an unresolved template binding is
+only useful while it follows the templates. It has already paid for itself: it
+was reporting `mapSize` and `googleMapCenter` as unresolved before this split,
+which meant the Google viewer's centre label was rendering "No location" and the
+GeoJSON overlay's `viewBox` was `0 0 undefined undefined`.
+
+The shell's chrome is a 30px status bar along the bottom
+(`.launcher-header`): the "All apps" toggle first, then the app title on one
+truncated line, then the workspace-report pill when there is something to report.
+It was a 72px top header carrying a brand mark, a subtitle, the report, and the
+toggle — three static strings and a 25px tile for permanent vertical space. Its
+height is the token `--statusbar-h`, which all six full-height panes subtract
+from `--viewport-h`; the token grows to 44px under `@media (pointer: coarse)`
+because the report's dismiss control is a tap target, and it must grow *in the
+token* or every pane would overflow the viewport. The bar is still the first
+child in the template and is moved to the bottom with `order: 1`, because the
+panes rely on DOM order for their `v-show` behaviour and the WebKit repaint
+watcher walks siblings in order.
 
 The Text Editor is a plain writing surface:
-
 1. Opens only for a picked outline section: with no resolvable active item it
    shows a section picker (`.toc-pick`) instead of the textarea — pick a
    declared section to load its draft, or jump to the TOC Manager to declare
@@ -169,14 +238,14 @@ writing flow:
 
 ## Workspace integration
 
-The four cards read and write one persisted record instead of isolated state:
+The six cards read and write one persisted record instead of isolated state:
 
 1. `src/workspace.js` defines the schema, normalizes every field on read and
    write, migrates the legacy outline key, debounces saves, and records every
    storage failure as a report (`getWorkspaceReport()`: scope, code, message)
    instead of only logging it. Each save stamps `savedAt` so the newer copy
    wins. `App.vue` renders the latest report as a dismissible
-   `#workspace-report` pill in the launcher header, so a corrupt stored copy,
+   `#workspace-report` pill in the status bar, so a corrupt stored copy,
    a rejected native read, or a failed write is visible in every view rather
    than hidden in the console.
 2. `App.vue` seeds its refs from the synchronous `loadWorkspace()` cache and
@@ -234,10 +303,18 @@ screen instead of blanking the map and fetching a new set dozens of times. The
 new set is committed when the gesture settles or drifts past
 `ZOOM_COMMIT_THRESHOLD`, at which point the scale is 1 again.
 
-One ring of tiles beyond the viewport is always requested (`TILE_BUFFER`), so
-panning almost never exposes a tile that was never fetched. The tile set is
-floored, so it only changes when the viewport actually crosses a tile line — a
-few pixels of drag do not churn the DOM.
+One ring of tiles beyond the viewport is wanted (`TILE_BUFFER`), so panning
+almost never exposes a tile that was never fetched. The tile set is floored, so
+it only changes when the viewport actually crosses a tile line — a few pixels of
+drag do not churn the DOM.
+
+**Wanting a tile is not fetching it.** A token bucket (`TILE_BURST`, refilled
+once per `rateFloorMs`) admits tiles to the network, centre-outward, and an
+admitted tile stays admitted for the session — so panning back over ground
+already walked costs no request. An unadmitted tile holds a transparent pixel
+rather than a URL, and is not mounted as an `<img>` at all: a pending `<img>`
+fires its load event immediately, which would tell the loading indicator that
+ground had arrived. See `docs/map-sources.md` for the policy this serves.
 
 ### How it is driven
 
@@ -304,6 +381,66 @@ wholesale rather than mutated in place) and states the one name that differs
 rather than guessing at it. That check found the second, identical bug
 immediately.
 
+### Importing places from a file
+
+One click at a time does not scale past a handful of places, so the sidebar's
+`Import` reads a file of them: GeoJSON, or CSV with named lat/lon columns. It is
+separate from the GeoJSON *layer* loader on purpose — a layer is drawn and
+discarded, whereas these persist and can be attached to an outline section, and a
+survey's waypoints are usually wanted as both.
+
+Three things it deliberately will not do:
+
+- **Guess at column positions.** Latitude and longitude are found by header name.
+  `lon,lat` is at least as common as `lat,lon`, and reading it the wrong way
+  round yields a list of plausible places in the wrong hemisphere — no error, no
+  empty map, just markers scattered across the planet. A file with no coordinate
+  columns is refused rather than guessed at.
+- **Geocode.** There is no geocoder in this app, so a row with a name and no
+  coordinate cannot be resolved and is counted as skipped. Inventing a position
+  would put a pin somewhere the file never claimed. The opposite case is kept: a
+  Point feature with *no name* is labelled from its own coordinates, which is
+  exactly the label `addPlace()` would have invented for it.
+- **Invent a second set of rules.** `addPlaces()` folds through the same
+  validator, the same coordinate dedupe, the same label cap, and the same
+  `MAX_SAVED_PLACES` as the single-place path, and commits once rather than per
+  row. A file larger than the cap reports how many were dropped, because a silent
+  truncation looks like the file was wrong.
+
+Re-importing the same file adds nothing: the dedupe is by coordinate, not by
+name.
+
+### Measuring between places
+
+`geo.js` has haversine distance and initial bearing, plus the formatting for
+both. Haversine rather than the spherical law of cosines, because the latter
+loses most of its digits for two nearby points — which is the common case here,
+since the distances on screen are between pins a few streets apart. The bearing
+handles the antimeridian, where a naive longitude difference sends the reader
+west around the planet instead of east.
+
+Two places show it, answering different questions: the cursor readout measures to
+the *selected* place (opened in the sidebar or clicked on its marker), and the
+sidebar shows the leg distance between each pair of consecutive places so a route
+is visible as a shape rather than a list of unrelated coordinates. The leg
+distances are memoised on the coordinate pair, because the list re-renders on
+every pointer move.
+
+### Locating the reader
+
+`map-locate.js` uses `navigator.geolocation` rather than waiting for TODO-039's
+native transport, and returns exactly the three codes that binding will return —
+`LOCATE_UNAVAILABLE`, `LOCATE_DENIED`, `LOCATE_TIMEOUT` — so the swap is a change
+to one function. A fourth case the specification does not name is decided rather
+than left to chance: a fix with no usable coordinate is refused, not turned into
+0,0.
+
+This is a weaker guarantee than the native path and says so where a reader looks:
+in a browser this resolves against the OS location service, which on a desktop is
+often city-level or absent. The reported accuracy is passed through to the status
+line unrounded, rather than hidden behind six decimal places of confidence the
+device does not have. It does not close TODO-039.
+
 ### Rendering options
 
 | Option | What it does |
@@ -311,7 +448,8 @@ immediately.
 | Colour filter | grayscale, dark, sepia, vivid, faded, or original. Applied to the tile layer or canvas as one CSS `filter`, so the browser filters a single element instead of compositing each tile |
 | Renderer | `DOM` draws a few dozen `<img>` tiles; `Canvas` draws the same set through the same `layerTransform()` onto one element |
 | Tile grid | A background locked to tile lines. The cell size carries the layer scale and the offset the layer translate, so the grid tracks the map exactly instead of drifting a pixel per pan |
-| Cursor readout | The coordinate under the pointer, updated on every move and cleared when it leaves or is switched off |
+| Cursor readout | The coordinate under the pointer, updated on every move and cleared when it leaves or is switched off. When a place is selected it also shows the bearing and distance to it — the scale bar answers "how big is a pixel", this answers "how far is the thing I am pointing at" |
+| Locate | Centres the map on the reader through `navigator.geolocation`, with a bounded wait and a distinct message for each of the three ways it can fail. The native `locateMapPlace` binding is preferred when the host provides one |
 | Sidebar | Collapsed by narrowing the column, not by unmounting, so the list keeps its scroll position and the canvas keeps a measured width |
 
 `MAP_FILTERS` is a closed list on both sides: each name has a matching
@@ -321,19 +459,32 @@ with no way back.
 
 ### How the map is split
 
-Six modules, layered so each one only depends on the ones above it:
+Layered so each module only depends on the ones above it:
 
 ```
-geo.js            coordinate primitives; imports nothing
-map-projection.js geometry and layout;        -> geo
-map-input.js      gesture vocabulary;          imports nothing
-map-canvas.js     the canvas renderer;         imports nothing
-map-explorer.js   the session that composes them
-map-places.js     the saved-place collection
+geo.js                coordinate primitives and measurement; imports nothing
+map-projection.js     geometry and layout;        -> geo
+map-input.js          gesture vocabulary;          imports nothing
+map-geojson-view.js   layers as shapes;            -> map-projection
+map-canvas.js         the canvas renderer;         -> map-geojson-view
+map-viewport.js       the shared map;              -> map-canvas, map-input,
+                                                    map-projection, map-geojson-view
+map-explorer.js       the Explorer;                -> map-viewport, map-places
+google-maps-session.js the Google viewer;          -> map-viewport
+map-places.js         the saved-place collection   -> geo, workspace
+map-places-import.js  a file of places             -> geo
+map-locate.js         the reader's position        imports nothing
 ```
 
-`geo.js` and `map-input.js` and `map-canvas.js` are leaves, which is what keeps
-the graph acyclic. That matters: an earlier version had the schema importing the
+The `map-viewport.js` row is the one that changed the shape of this graph. The
+Explorer and the Google viewer used to be near-copies of each other's map code —
+32 shared functions, ~476 lines — and the copies had already drifted: the rate
+floor existed in one and was documented as applying to both, and the Google
+viewer's canvas was never sized because `measureMap()` reached for the
+Explorer's element id. One `createMapViewport()` now owns that half and each
+session is only what makes it *its* map.
+
+`geo.js` and `map-input.js` are leaves, which is what keeps the graph acyclic. That matters: an earlier version had the schema importing the
 map to get a coordinate validator, which closed
 `map -> boot-state -> workspace -> map` and left the map's default arguments
 reading an uninitialised binding. The rule that falls out of it is that a pure

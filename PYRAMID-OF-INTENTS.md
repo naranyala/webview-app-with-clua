@@ -38,7 +38,10 @@ Users should be able to enter samples and receive a trustworthy summary.
 ### I1.2 — Make the boundary between UI and native code explicit
 
 The frontend should communicate with native code through a small, documented
-bridge. The UI must not depend on implementation details of the C engine.
+bridge. The UI must not depend on implementation details of the C engine. A
+tool that reaches the network from the page, or parses a host response itself,
+has crossed this boundary without saying so — the Map Explorer's tile fetch is
+the open case.
 
 ### I1.3 — Keep the project approachable as a starter template
 
@@ -51,29 +54,49 @@ Lua remains the scripting/integration surface for programmatic workflows, and
 WebView remains the desktop presentation surface. They may share the C core,
 but neither should be accidentally presented as the other.
 
-### I1.5 — Treat the four menu tools as one workspace
+### I1.5 — Treat the menu tools as one workspace
 
 The Text Editor, TOC Manager, PDF Reader, and Image Viewer are not isolated
 screens. They share one persisted workspace: the declared outline and its
 drafts, the last view, the open document session, and the selected image
 folder all survive a restart, and any tool may reference content owned by
-another (an outline item pointing at a PDF page or an attached image).
+another (an outline item pointing at a PDF page or an attached image). The
+Map Explorer of **I1.6** joined that same record rather than starting a second
+one.
 
 **Success looks like:** a contributor can point at one store that owns the
 cross-tool state, and a user can move from outline to source document and back
 without re-declaring or re-losing anything.
 
-### I1.6 — Add an OpenStreetMap explorer as a fifth tool
+### I1.6 — Add an OpenStreetMap explorer as a map tool
 
-The fifth grid card opens a map: pan-and-zoom raster tiles, a basemap
-switcher, place search, current-location lookup, and named bookmarks that
-survive a restart. The WebView page cannot reach tile servers itself, so
-tiles, search, and geolocation arrive through narrow native bindings that
+The grid opens a map: pan-and-zoom raster tiles, named bookmarks that survive a
+restart, and current-location lookup. The WebView page must not reach tile
+servers itself, so tiles and location arrive through narrow native bindings that
 fetch over allowlisted HTTPS, rate-limit, and cache on disk.
 
-**Success looks like:** a user opens the explorer, pans to a place, searches
-for it, bookmarks it, and finds both the bookmark and the last position after
-a restart — with attribution and usage-policy limits visible in the docs.
+**Success looks like:** a user opens the explorer, pans to a place, bookmarks it,
+locates themselves, and finds both the bookmarks and the last position after a
+restart — with attribution and usage-policy limits visible in the docs.
+
+**Amended 2026-10-06, and the amendment is the point.** This intent previously
+listed "a basemap switcher, place search" among the explorer's features. Neither
+exists: the Explorer has a *colour filter* over one basemap, not a switcher, and
+there is no place search anywhere in the tree. TODO-038 had been marked `— DONE`
+with evidence describing a search debounce and a stale-response guard that were
+never written, and this intent was where that error became invisible. Two changes
+follow:
+
+- **Place search is not required, and is deliberately out of scope here.** A
+  geocoder is a network client, so a page-side one would be a second crossing of
+  **I1.2** — the same crossing the tile fetch already is. If search is wanted it
+  belongs to the native transport in TODO-036, and this intent should be amended
+  again at that point rather than the page growing a geocoder.
+- **A basemap switcher is a separate question** from a colour filter, and only
+  the Google viewer has one. Whether the Explorer grows a real switcher is a
+  product decision, recorded as open in TODO-038.
+
+The intent IDs stay stable; this entry states more precisely what was meant.
 
 ## I2 — User intents
 
@@ -156,23 +179,70 @@ changeable independently behind small contracts.
 
 ## Current state snapshot
 
-Already present:
+Verified against the tree and a full test run on 2026-10-06, rather than against
+these entries. Every claim below was checked by running it.
 
-- C metrics engine with lifecycle, validation, reset, and summary operations.
-- Lua userdata binding and Lua convenience wrapper.
-- C WebView host with a `summarize` bridge.
-- Octane frontend integrated with the bridge and single-file build.
-- C unit test and Lua integration test scaffolding.
+Already present and working:
 
-Known gaps:
+- C metrics engine with lifecycle, validation, reset, and summary operations. The
+  variance is Welford's algorithm, so it stays correct for values whose sum would
+  lose precision - **I4.2**, not a claim about it.
+- Lua userdata binding and Lua convenience wrapper. `make lua-test` passes here.
+- C WebView host registering **14 bindings**, of which `summarize` has no
+  production UI caller. It is kept for the Lua example, the bridge tests, and the
+  smoke test, which is stated in the README rather than left for a reader to
+  discover.
+- Vue frontend: six tools on one shared workspace record, one component per pane,
+  the map split into a shared viewport and two thin sessions.
+- Durable C-owned workspace store — temp file, fsync, atomic rename, directory
+  fsync, 4 MiB cap — so state survives the inline render mode. `localStorage` is
+  only a boot cache and loses to the file on `savedAt`.
+- 11 C suites declared once in `tests/MANIFEST` and read by `make`, `build.lua`,
+  and CMake alike; 17 C test binaries build and pass here, plus the Lua suite and
+  30 frontend suites.
+- A single-file build with a Content-Security-Policy injected at build time,
+  whose `img-src` names the tile hosts and whose `script-src` carries a hash of
+  the inlined bundle.
 
-- Full Lua test execution depends on installed Lua development metadata.
-- The frontend has build/format checks but no browser behavior test runner.
-- The desktop frontend-to-C path is covered by a GUI smoke test
-  (`make smoke-test`), but it only runs where a graphical session exists; CI
-  has no workflow for it yet.
-- Bridge output is structured, but response-buffer truncation and frontend
-  component-level interaction coverage still require explicit tests.
-- The desktop build fetches WebView through CMake on first use.
-- The frontend cannot calculate in a normal browser preview without the native
-  bridge, by design.
+Known gaps, in the order they should be closed:
+
+- **The Map Explorer loads tiles from the page, not through a native binding.**
+  This is the one place **I1.2** is not held, and it is why I1.6 could not
+  promise a geocoder either. TODO-035 and TODO-036.
+- **The Google viewer uses an unlicensed endpoint.** `mt1.google.com/vt/lyrs=`
+  with no API key and no Maps Platform agreement, named in the shipped CSP
+  allowlist because that is a statement about reachability, not permission.
+  TODO-094.
+- **`summarize` has no production UI path.** The headline native capability is
+  exercised by Lua, the bridge tests, and the smoke test, and by nothing a user
+  touches. That is acceptable for a starter whose subject is the pattern rather
+  than the calculator, but it should be a decision, not an accident.
+- **Six pane components rendered `<StatusLine>` without importing it**, so every
+  status line in the app showed nothing and announced nothing — the message became
+  an attribute on an unknown element. Vue does not report an unresolved component,
+  and the shell tests assert ids and anchors, which `<statusline>` satisfies, so
+  nothing caught it. Fixed; `tests/menu-cards.test.js` now checks that every
+  capitalised component a template renders is imported by that template's file.
+- **The GUI smoke test needs a graphical session and CI has no workflow for
+  running it.** That gap is why the menu-card count could sit at 5 while the app
+  rendered 6 for as long as it did: the only place that compared them was the one
+  place CI does not run. The comparison now also happens in `npm test`
+  (`tests/menu-cards.test.js`, `tests/bridge-bindings.test.js`,
+  `tests/readme-map.test.js`), which is the fix that actually holds.
+- **The frontend has no mounted component test for the map, the reader, or the
+  lightbox.** The map has extensive session-level tests; the panes do not have
+  jsdom coverage.
+- **The first desktop build fetches WebView through CMake**, pinned to a commit
+  rather than a tag, so two clean builds resolve the same source — but it is still
+  a first-use network dependency. TODO-010.
+- **The frontend cannot reach the native bindings in a plain browser preview**, by
+  design. Workspace state falls back to `localStorage`.
+
+**One thing this snapshot exists to prevent.** Earlier it listed a five-tool
+workspace and a Map Explorer with "a basemap switcher, place search". None of that
+was true: there are six tools, the Explorer has a colour filter rather than a
+switcher, and there is no place search anywhere in the tree — while `TODOS.md`
+carried a `— DONE` marker whose evidence described a search debounce and a
+stale-response guard that were never written. A document that describes intent can
+be aspirational; a document labelled *current state* cannot, and it is the label
+that makes people stop checking.

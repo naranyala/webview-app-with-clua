@@ -1,7 +1,23 @@
 # Testing guide
 
-Testing is split by boundary so a failure points to the smallest relevant
-layer.
+Testing is split by boundary so a failure points to the smallest relevant layer.
+
+Eleven C suites, one Lua suite, 33 frontend suites. Each C suite is declared once
+in [`tests/MANIFEST`](../tests/MANIFEST) and read identically by `make`,
+`build.lua`, and CMake — so the three runners cannot disagree about what exists,
+and adding a suite is a one-line edit.
+
+```sh
+make test        # 11 C suites + the Lua suite
+make c-tests     # compile the C suites without running them
+make sanitized-test
+cd frontend-vue && npm test
+```
+
+The running theme is that each layer is testable **without the one above it**: the
+C suites need no GTK window and no WebView, the frontend suites need no browser and
+no host, and the Lua suite needs no UI. Only the smoke test needs a real graphical
+session, which is why it is the single place where the wiring is actually proved.
 
 ## Test layers
 
@@ -49,7 +65,7 @@ request lists.
 Run:
 
 ```sh
-make workspace-test
+make c-tests && build/test_workspace_store
 ```
 
 ### Host plumbing tests
@@ -86,40 +102,106 @@ make pdf-toc-test
 
 ### Map tests
 
-[`tests/map-explorer.test.js`](../tests/map-explorer.test.js) pins the
-projection against known slippy-map tile numbers rather than against the
-implementation, and covers the layer transform (including the two ways it is easy
-to get wrong: the scale's sign, and the fact that the translate must *not* be
-scaled), the prefetch ring, wheel intent, inertia, keyboard driving, the scale
-bar, and staying inside the world.
+The map has more tests than anything else in the frontend, and they are split along
+the same lines as the source so each suite covers the module it names.
 
-Travelling is covered with a clock and a frame queue the test drives, so a 560ms
-journey is stepped through frame by frame rather than waited on: that the view
-interpolates rather than jumps, that the tile set is re-committed often enough
-that the drawn ground is never magnified more than the commit threshold, that
-the outgoing layer is held until every incoming tile has arrived, that a grab or
-a key cancels the journey without moving the pin, and that a reduced-motion
-preference arrives without animating.
+[`map-projection.test.js`](../frontend-vue/tests/map-projection.test.js) needs no
+session at all. It pins the Web Mercator formulas against known slippy-map tile
+numbers rather than against the implementation, so a change that breaks real
+coordinates fails here instead of quietly shifting the map. It also covers the
+layer transform — including the two ways it is easy to get wrong: the scale's sign,
+and the fact that the translate must *not* be scaled — plus the prefetch ring, the
+scale bar, and the coordinate primitives.
 
-[`tests/map-canvas.test.js`](../tests/map-canvas.test.js) builds the canvas
-renderer directly, with a recording context and a stub `Image`, and covers the
-draw path, the transform reaching the context, frame coalescing, cache eviction,
-and that a failed tile is not re-fetched every frame. It also asserts that the
-canvas and the DOM layer place a tile identically, since switching renderers
-would otherwise shift the map.
+[`map-viewport.test.js`](../frontend-vue/tests/map-viewport.test.js) covers the
+shared viewport: zoom commits, the tile **rate floor**, pan, inertia, the pointer
+and keyboard handlers, and the loading state. The rate-floor cases assert the
+deferral itself rather than the constant, because a test that only checked the
+number would pass against a bucket nothing consulted — which is exactly the bug
+that left the floor declared and unenforced. One case there pins a defect worth
+naming: `mapLoading` measures against the *wanted* tile set, not the admitted one,
+so the outgoing layer is not retired while half the screen is still queued.
 
-[`tests/map-places.test.js`](../tests/map-places.test.js) covers the saved-place
-collection and the view options: the rules that keep a place list usable (a name
-is required, a repeat pick does not duplicate, the cap holds, a duplicate id is
-dropped), and the canvas renderer's draw path with an injected image factory,
-since node has no `Image` constructor.
+[`map-explorer.test.js`](../frontend-vue/tests/map-explorer.test.js) covers what
+makes this the Explorer rather than a map: the pin, the click-versus-drag
+threshold, saved places, the badge, and flights. Travelling uses a clock and a
+frame queue the test drives, so a 560 ms journey is stepped frame by frame rather
+than waited on — the view interpolates rather than jumps, the tile set is
+re-committed often enough that the ground is never magnified past the commit
+threshold, the outgoing layer is held until every incoming tile lands, and a grab
+or a key cancels the journey without moving the pin.
+
+[`map-canvas.test.js`](../frontend-vue/tests/map-canvas.test.js) builds the canvas
+renderer directly, with a recording context and a stub `Image` — node has no `Image`
+constructor — and covers the draw path, the transform reaching the context, frame
+coalescing, cache eviction, and that a failed tile is not re-fetched every frame.
+It asserts that the canvas and the DOM layer place a tile identically, since
+switching renderers would otherwise shift the map.
+
+[`map-geojson.test.js`](../frontend-vue/tests/map-geojson.test.js) covers the
+imported-layer path: the shape conversion, and that the loader rejects a
+malformed FeatureCollection with a message rather than a throw. It pins the
+projection at a known view, because the overlay was once placed at zoom 0 while
+its ground sat at the tile zoom — correct at scale 1 and thousands of pixels wrong
+everywhere else.
+
+[`map-places.test.js`](../frontend-vue/tests/map-places.test.js) covers the
+saved-place collection and the view options: the rules that keep a place list
+usable (a name is required, a repeat pick does not duplicate, the cap holds, a
+duplicate id is dropped).
+
+[`map-places-import.test.js`](../frontend-vue/tests/map-places-import.test.js)
+covers reading a file of places. Its interesting cases are the wrong ones: a
+swapped coordinate pair, a name containing a comma, more points than the
+collection can hold. Each produces a list that looks entirely plausible and is
+entirely wrong.
+
+[`google-maps-session.test.js`](../frontend-vue/tests/google-maps-session.test.js)
+covers the second viewer: the tile URL for each layer, all five Google URL shapes
+including the two that yield no coordinates, and the GeoJSON export. That last one
+pins `[longitude, latitude]` order, which is the reverse of the `{lat, lon}` used
+everywhere else in the app — getting it backwards opens the file in the wrong
+hemisphere and is invisible in review.
+
+[`geo-locate.test.js`](../frontend-vue/tests/geo-locate.test.js) covers locating
+the reader, driving all four outcomes with injected geolocation and manual timers,
+so no case waits out the twelve-second timeout.
 
 Two checks exist because wiring bugs here are invisible to unit tests. The smoke
-run is what catches an app that fails to mount. And biome's
-`noUndeclaredVariables` rule catches a name used in a `App.vue` script but never
-imported: such a build mounts, renders, and passes every test, then dies on the
-first click that reaches it. `template-bindings.test.js` covers the remaining
-direction, that every name App.vue imports is really exported.
+run catches an app that fails to mount. And `template-bindings.test.js` plus
+biome's `noUndeclaredVariables` cover both directions of a missing import — the
+build mounts, renders, and passes every test, then dies on the first click that
+reaches the missing name. That check had been red for a while, and it turned out
+to be reporting two real bugs: a name the Google toolbar used and never imported,
+so its centre label rendered "No location", and a name the GeoJSON overlay used
+and never imported.
+
+### Image directory tests
+
+[`tests/test_image_directory.c`](../tests/test_image_directory.c) covers the
+bounded directory scan and the lightbox's full-resolution fetch. GdkPixbuf is
+linked for real, because the central claim is "the thumbnail is dramatically
+smaller than the original" and a fake decoder cannot test a claim about sizes.
+Images are generated at runtime with GdkPixbuf rather than checked in as
+fixtures, so the suite is not pinned to one decoder's output bytes, and the size
+assertion is a ratio rather than an absolute count so it survives a different
+libjpeg build.
+
+It covers: a 4032×3024 source producing a 320×240 thumbnail at least 20× smaller
+than the original as base64; a portrait image scaled on its long edge; a small
+image *not* upscaled; an undecodable file falling back to the original and
+incrementing `fallbacks`; `limited` and `fallbacks` present on every reply;
+`loadImageAt` serving a scanned path at full resolution; and — the security
+property — refusing a path the last scan did not walk, which is what keeps the
+binding from being a general file reader reachable from the page.
+
+Needs GTK and gdk-pixbuf, which `make check-gdk-pixbuf` verifies.
+
+Run:
+
+```sh
+make image-directory-test
+```
 
 ### Combined outline PDF tests
 
@@ -141,6 +223,40 @@ Run:
 
 ```sh
 make outline-pdf-test
+```
+
+### Combined outline round-trip tests
+
+[`tests/test_outline_roundtrip.c`](../tests/test_outline_roundtrip.c) answers the
+one question the two suites above cannot: if this renderer draws a heading, will
+the reader's extractor recognise it? It renders through the real
+`renderOutlinePdf` binding and reads the file back with the real
+`extract_pdf_toc`.
+
+That gap was not hypothetical. `extractPdfToc` re-derives headings from
+`pdftotext -tsv` font heights — it never reads a PDF outline tree — and rejects
+anything under a 1.25 ratio to the page's median body height. H3 was drawn at
+12.5pt against a 10.5pt body, which measures as about 1.19x, so every H3
+subsection silently vanished from the preview of a document that contained it.
+`test_outline_pdf.c` asserted the page count and `test_pdf_toc.c` asserted
+headings in its own fixture; neither asked about headings from *this* renderer.
+
+The suite has four cases: all three levels survive the round trip; a document
+re-rendered at the old 12.5pt H3 loses the subsection (a control, so a green
+first test means the sizes are load-bearing rather than incidental); the
+published `PDF_HEADING_MIN_DETECT_RATIO` in `pdf_toc.h` matches the extractor;
+and sentence case is asserted as a *known limit* — `is_title_like` rejects it
+however large it is drawn, which is the reader's heuristic and not something the
+renderer can fix without mangling the author's capitalisation.
+
+It needs cairo and pdftotext but no GTK, which is why the `cairo-pdftotext`
+MANIFEST profile exists: the renderer includes no toolkit header, so the only
+GTK-adjacent symbols left are two `app_support` entry points, stubbed here.
+
+Run:
+
+```sh
+make outline-roundtrip-test
 ```
 
 ### Text transfer tests
@@ -219,28 +335,93 @@ leak detection enabled when the environment supports it.
 
 ### Frontend checks
 
-The frontend has one file per session module (`native-bridge`, `file-io`, `workspace-persistence`,
-`workspace-report`, `app-shell`, `editor-session`, `pdf-session`,
-`image-session`, `toc-outline`) covering the state those modules own: native
-call decoding and argument forwarding, system-picker transfers with their
-browser fallbacks and one shared outcome pipeline, the persistence engine
-(snapshot, write order, debounce, hydration), persistence reports, view cleanup, outline sync, page
-navigation and scroll math, image grouping and the lightbox, heading
-import, outline editing, and outline/draft import-export. Static contract
-tests cover the template, the stylesheet,
-the build config, and the native host; `template-bindings.test.js` compiles
-`App.vue`
-with Vue's compiler and fails when the template references a name the script
-setup does not bind. They run without a browser or WebView:
+33 suites, run with `npm test` in `frontend-vue/`. No browser, no WebView, no
+network. They fall into four groups.
+
+**Sessions** — one file per module, covering the state that module owns:
+`app-shell`, `native-bridge`, `file-io`, `editor-session`, `pdf-session`,
+`image-session`, `image-viewer`, `outline-pdf`, `workspace`, `workspace-report`,
+`workspace-persistence`, and `session-factories`.
+
+**The outline** is large enough to be split by concern rather than left as one
+growing file: `toc-outline` covers the outline model and the level rules,
+`toc-outline-map-links` the link affordances that bind an item to a PDF page, an
+image, or a saved place, and `toc-outline-transfer` the import/export round trip.
+All three share `support/toc-fixtures.mjs`, because three suites that each
+construct an outline separately drift apart on the first field that changes.
+
+Plus the map set
+(`map-projection`, `map-viewport`, `map-explorer`, `map-canvas`, `map-geojson`,
+`map-places`, `map-places-import`, `google-maps-session`, `geo-locate`).
+
+**The map's own arithmetic** is split along the same lines as the source, so each
+suite covers the module it names: `map-projection.test.js` pins the Web Mercator
+formulas against known slippy-map tile numbers with no session at all, and
+`map-viewport.test.js` covers zoom commits, the tile rate floor, gestures, and
+loading state.
+
+**Static contracts** — `static-shell`, `template-bindings`, `responsive-layout`,
+and `csp` read the source and the stylesheet as text. They assert that every
+template identifier resolves to a binding, that the template compiles, that the
+CSS satisfies its layout invariants, and that the built `dist/index.html` carries
+a policy whose `script-src` hash matches its inlined bundle.
+
+**Drift guards** — `menu-cards`, `bridge-bindings`, and `readme-map`. These
+exist because documentation does not fail loudly when it becomes wrong, and each
+one turns a specific past drift into a red test: the launcher disagreeing with the
+static shell and the smoke check about how many tools there are, a binding
+registered in C but undocumented, a source file missing from the README map.
+
+#### The mounted component
+
+`component-dom.test.js` is the one suite that mounts the real application. It
+drives the event paths the others can only assert about — clicking each of the six
+menu cards and checking its pane opens, declaring a section, the editor gate
+refusing a draft with no section picked, two sections keeping separate drafts, a
+draft surviving a view switch, a rejected binding reaching the status line, and a
+restored workspace landing on the saved view.
+
+Three details of the harness are load-bearing, and two of them were found by a
+test failing rather than by design:
+
+- **The loader is a `--import` preload, not per-file setup.**
+  `@vue/runtime-dom` captures `document` when it is first imported, so a jsdom
+  window installed afterwards leaves it holding `null` and every mount dies with
+  "Cannot read properties of null (reading 'createElement')" — an error that points
+  at Vue rather than at the missing DOM.
+- **The DOM is installed by the test file, not globally.** Installing it in the
+  preload would hand every suite a real `localStorage` and `document`, which
+  silently breaks the "this browser does not allow workspace storage" case and the
+  anchor-download stub. Those tests exercise the no-host path, so the harness stays
+  opt-in.
+- **`?fresh=N` rebuilds the whole graph.** `openApp()` clears `localStorage` and
+  re-imports `App.vue` under a token the loader propagates, so the module-level
+  session singletons are rebuilt per test rather than inherited from whichever test
+  ran last.
+
+#### Shared fixtures
+
+`tests/support/` holds what more than one suite needs: the DOM harness
+(`dom.mjs`, `dom-globals.mjs`), the SFC loader and its preload hook, and two
+fixture modules — `map-fixtures.mjs` (the tolerance assertion and the session
+builders) and `toc-fixtures.mjs` (the outline reset and the persistence counter).
+The persistence counter is exported as an accessor rather than a binding, because a
+module's exported `let` is live but unassignable from outside and the tests need to
+reset it between cases.
+
+#### Running
 
 ```sh
 cd frontend-vue
-npm test
-npm run check
-npm run build
+npm test        # all 33
+npm run check   # biome
+npm run build   # the single-file artifact
+
+node --import ./tests/support/register-sfc.mjs --test tests/map-viewport.test.js
 ```
 
-The native bridge itself remains covered by `make bridge-test`.
+All of it runs without a browser or WebView. The native bridge itself is covered
+on the C side by `make bridge-test` equivalents — see `tests/test_bridge.c`.
 
 ## Desktop smoke test
 
@@ -249,8 +430,8 @@ the frontend and the desktop host, launches the real application in a real
 graphical session once per render mode (`file://` URL and inline `set_html`),
 and lets the frontend check the real DOM and the real bindings:
 
-- the shell rendered (root shell, all four tool panes, the editor gate, four
-  menu cards),
+- the shell rendered (root shell, all six tool panes, the editor gate, six menu
+  cards),
 - `summarize` with representative values returns a summary, and bad input
   returns the shared error shape,
 - `loadWorkspace` answers `{ok, workspace}`,
@@ -275,31 +456,34 @@ bindings, and the host half in `tests/test_smoke.c`.
 
 ## Full local verification
 
-Every C test plus the Lua binding test:
+The complete pass, in the order that fails fastest:
 
 ```sh
-make test
-make sanitized-test
+cd frontend-vue
+npm test                       # 33 suites, ~a minute, no browser
+npm run check                  # biome lint and format
+cd ..
+
+make test                      # 11 C suites + Lua
+make sanitized-test            # the C suites again, under a sanitizer
+
+lua build.lua test             # the above plus the frontend checks and build
+lua build.lua desktop          # the complete desktop path
 ```
 
-With Lua installed, the same path (plus the frontend checks and build):
-
-```sh
-lua build.lua test
-```
-
-For the complete desktop path, also run:
-
-```sh
-lua build.lua desktop
-```
-
-Then enter valid, invalid, empty, and very large values in the UI, and run the
-GUI smoke test on a machine with a graphical session:
+Then the GUI smoke test, on a machine with a graphical session:
 
 ```sh
 make smoke-test
 ```
+
+`make smoke-test` is the only step that cannot run headless, and that gap is
+recorded rather than worked around: no CI workflow exists for it, which is how the
+menu-card count came to disagree with the app's own smoke check. If you change
+anything about the shell, the panes, or the bindings, run it locally.
+
+Expected result for the whole lot: 11/11 C suites, 33/33 frontend suites, the Lua
+suite passing, and `SMOKE VERDICT: pass` from both render modes.
 
 ## Test design principles
 
@@ -308,3 +492,11 @@ make smoke-test
 - Include boundary values and malformed protocol input.
 - Keep C and bridge tests runnable without a GUI, and keep the GUI smoke test
   as the one place that needs a session.
+- Assert that a failure reaches the user. A binding that rejects must change
+  what is on screen, not merely not throw.
+- Mutation-check a new test. A test that would also pass against the broken
+  behaviour is not a test, and reading it green is the only evidence available
+  short of deliberately breaking the code to find out.
+- Keep a test independent of its neighbours, including of module-level state.
+  A shared singleton or a persisted store leaking between tests makes the suite
+  order-dependent, which fails silently when the runner reorders.
