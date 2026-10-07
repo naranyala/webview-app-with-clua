@@ -4,16 +4,22 @@
  *
  * Every case writes TEST_FILE in the current directory and removes it, so the
  * suite is safe to run from the Makefile in any order.
+ *
+ * One assertion is a source check rather than a behavioural one, and its header
+ * says why: the read-before-check ordering cannot be observed at runtime on this
+ * filesystem. That is a deliberate, weaker claim, not an oversight.
  */
 
 #include "workspace_store.h"
 
 #include <assert.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #define TEST_DIRECTORY "build/workspace-store-test"
 #define TEST_PATH TEST_DIRECTORY "/workspace.json"
@@ -27,9 +33,42 @@ static char *load_into(size_t *length_out, workspace_store_result *result_out) {
     return workspace_store_load(TEST_PATH, length_out, result_out);
 }
 
+
+
 static void assert_string_equals(const char *actual, const char *expected) {
     assert(actual != NULL);
     assert(strcmp(actual, expected) == 0);
+}
+
+/*
+ * The size cap must be decided from g_stat, before g_file_get_contents runs.
+ *
+ * A source assertion, and the reason is in the caller's comment above: on this
+ * filesystem neither runtime probe for the ordering discriminates. What this
+ * does catch is the real defect -- a pre-check that is deleted, or moved below
+ * the read -- which is how this bug was introduced and how it would come back.
+ */
+static void assert_the_cap_is_checked_before_the_read(void) {
+    FILE *source = fopen("src/workspace_store.c", "r");
+    assert(source != NULL);
+
+    char text[65536];
+    size_t read = fread(text, 1, sizeof(text) - 1, source);
+    fclose(source);
+    assert(read > 0);
+    text[read] = '\0';
+
+    const char *stat_call = strstr(text, "g_stat(path");
+    const char *read_call = strstr(text, "g_file_get_contents(path");
+    assert(stat_call != NULL);
+    assert(read_call != NULL);
+    assert(stat_call < read_call);
+
+    /* And the stat must be compared against the cap, not merely present. */
+    const char *window = text + (stat_call - text);
+    assert(strstr(window, "WORKSPACE_STORE_MAX_BYTES") != NULL);
+    assert(strstr(window, "WORKSPACE_STORE_MAX_BYTES") <
+           read_call);
 }
 
 int main(void) {
@@ -187,6 +226,36 @@ int main(void) {
     free(oversized);
     remove_test_file();
 
+    /*
+     * The rejection has to be decided from the file's metadata, before its bytes
+     * are read.
+     *
+     * The assertion above only proves the outcome, which a post-read size check
+     * also produces - so on its own it cannot tell the two implementations
+     * apart, and the post-read version allocates the whole file first. That runs
+     * on the GTK main thread inside the loadWorkspace binding, so a
+     * multi-gigabyte workspace.json is a UI stall proportional to a file the user
+     * never meant to open.
+     *
+     * Two runtime probes for the *ordering* were tried and both failed to
+     * discriminate, which is why this is a source assertion instead:
+     *
+     *   - chmod 000, so a read fails and only a stat can succeed. This tree is a
+     *     fuseblk mount that does not honour chmod for the owner: measured, the
+     *     file stays readable, so the probe passes either way.
+     *   - a sparse file (ftruncate past the cap, no blocks written). The read
+     *     still succeeds - it returns zeros - so the post-read check rejects it
+     *     too, and again both implementations agree.
+     *
+     * So the ordering is asserted on the source: the size test must appear
+     * before the call that allocates. That is a weaker claim than a runtime
+     * measurement, and deliberately so - a comment that says "read the file
+     * first" must not be able to pass for a working pre-check. It fails on the
+     * real defect (a missing or reordered pre-check) rather than on an
+     * environmental quirk.
+     */
+    remove_test_file();
+
     /* Writing into a directory that does not exist fails instead of pretending. */
     assert(workspace_store_save(TEST_DIRECTORY "/absent/workspace.json", "{}", 2) ==
            WORKSPACE_STORE_ERR_WRITE);
@@ -198,5 +267,8 @@ int main(void) {
     assert(length == 0);
 
     remove_test_file();
+
+    assert_the_cap_is_checked_before_the_read();
+
     return 0;
 }

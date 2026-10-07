@@ -33,6 +33,11 @@ void pdf_toc_clear(pdf_toc *toc) {
 /*
  * Heading heuristics. Every threshold is named so a tuning change is a diff,
  * not a hunt through the parser.
+ *
+ * PDF_HEADING_MIN_DETECT_RATIO in pdf_toc.h is the published form of
+ * PDF_HEADING_MEDIUM_RATIO below: anything that generates a PDF this extractor
+ * reads has to clear it. The two are asserted equal by test_outline_pdf.c, so
+ * they cannot drift apart silently.
  */
 #define PDF_HEADING_TITLE_MAX_CHARS 180
 #define PDF_HEADING_MAX_WORDS 12

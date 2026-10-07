@@ -13,6 +13,11 @@ LUA_LIBS := $(shell $(PKG_CONFIG) --libs $(LUA_PKG) 2>/dev/null || $(PKG_CONFIG)
 GTK_CFLAGS := $(shell $(PKG_CONFIG) --cflags gtk+-3.0 2>/dev/null)
 GLIB_CFLAGS := $(shell $(PKG_CONFIG) --cflags glib-2.0 2>/dev/null)
 GTK_LIBS := $(shell $(PKG_CONFIG) --libs gtk+-3.0 2>/dev/null)
+# gdk-pixbuf for the image scan: it downscales each thumbnail, and the suite
+# links the real decoder because "is the thumbnail actually smaller" is the
+# claim under test.
+GDK_PIXBUF_CFLAGS := $(shell $(PKG_CONFIG) --cflags gdk-pixbuf-2.0 2>/dev/null)
+GDK_PIXBUF_LIBS := $(shell $(PKG_CONFIG) --libs gdk-pixbuf-2.0 2>/dev/null)
 CAIRO_CFLAGS := $(shell $(PKG_CONFIG) --cflags cairo 2>/dev/null)
 CAIRO_LIBS := $(shell $(PKG_CONFIG) --libs cairo 2>/dev/null)
 GLIB_LIBS := $(shell $(PKG_CONFIG) --libs glib-2.0 2>/dev/null)
@@ -43,7 +48,7 @@ $(TEST_MAKE): $(TEST_MANIFEST) tools/tests-manifest.awk Makefile
 include $(TEST_MAKE)
 
 .PHONY: all run test c-tests sanitized-test lua-test smoke-unit-test smoke-test
-.PHONY: desktop clean check-lua check-gtk check-pdftotext check-cairo
+.PHONY: desktop clean check-lua check-gtk check-pdftotext check-cairo check-gdk-pixbuf
 
 all: $(MODULE)
 
@@ -54,6 +59,10 @@ check-lua:
 check-cairo:
 	@command -v $(PKG_CONFIG) >/dev/null 2>&1 || { echo "pkg-config not found."; exit 1; }
 	@$(PKG_CONFIG) --exists cairo || { echo "cairo not found by pkg-config. The combined-outline PDF renderer needs it."; exit 1; }
+
+check-gdk-pixbuf:
+	@command -v $(PKG_CONFIG) >/dev/null 2>&1 || { echo "pkg-config not found."; exit 1; }
+	@$(PKG_CONFIG) --exists gdk-pixbuf-2.0 || { echo "gdk-pixbuf-2.0 not found by pkg-config. The image viewer downscales thumbnails with it."; exit 1; }
 
 check-gtk:
 	@test -n "$(GTK_LIBS)" || { echo "GTK 3 development files not found for pkg-config 'gtk+-3.0'. Install the GTK 3 development package."; exit 1; }

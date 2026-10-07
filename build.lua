@@ -246,7 +246,7 @@ end
 
 -- profile -> compile flags and libraries. A new profile needs an entry here,
 -- one in tools/tests-manifest.awk, and one in CMakeLists.txt.
-local function test_profile_flags(profile, glib, gtk, cairo, stub_dir)
+local function test_profile_flags(profile, glib, gtk, cairo, gdk_pixbuf, stub_dir)
   if profile == "core" then
     return { flags = {}, libraries = { "-lm" } }
   elseif profile == "glib" or profile == "glib-math" then
@@ -260,6 +260,25 @@ local function test_profile_flags(profile, glib, gtk, cairo, stub_dir)
     return { flags = glib.flags, libraries = libraries }
   elseif profile == "gtk-stub" then
     return { flags = gtk.flags, includes = { stub_dir }, libraries = gtk.libraries }
+  elseif profile == "gtk-pixbuf" then
+    -- GTK for app_support and the webview stub header, gdk-pixbuf for the
+    -- image scan's thumbnail decoder, which is linked for real because "is the
+    -- thumbnail actually smaller" is the claim under test.
+    local libraries = {}
+    for _, library in ipairs(gtk.libraries) do
+      table.insert(libraries, library)
+    end
+    for _, library in ipairs(gdk_pixbuf.libraries) do
+      table.insert(libraries, library)
+    end
+    local flags = {}
+    for _, flag in ipairs(gtk.flags) do
+      table.insert(flags, flag)
+    end
+    for _, flag in ipairs(gdk_pixbuf.flags) do
+      table.insert(flags, flag)
+    end
+    return { flags = flags, includes = { stub_dir }, libraries = libraries }
   elseif profile == "pdftotext" then
     return {
       flags = glib.flags,
@@ -284,6 +303,31 @@ local function test_profile_flags(profile, glib, gtk, cairo, stub_dir)
       table.insert(flags, flag)
     end
     return { flags = flags, includes = { stub_dir }, libraries = libraries }
+  elseif profile == "cairo-pdftotext" then
+    -- cairo + pdftotext, no GTK: this suite drives the renderer through its
+    -- binding, so it links app_support.c for return_native_error and the
+    -- dispatch helpers, but the *renderer itself* needs no toolkit - the chooser
+    -- call is stubbed. m for lround, which pdf_toc.c uses.
+    local libraries = { "-lm" }
+    for _, library in ipairs(cairo.libraries) do
+      table.insert(libraries, library)
+    end
+    for _, library in ipairs(glib.libraries) do
+      table.insert(libraries, library)
+    end
+    local flags = {}
+    for _, flag in ipairs(cairo.flags) do
+      table.insert(flags, flag)
+    end
+    for _, flag in ipairs(glib.flags) do
+      table.insert(flags, flag)
+    end
+    return {
+      flags = flags,
+      includes = { stub_dir },
+      defines = { [[PDFTOTEXT_EXECUTABLE='"pdftotext"']] },
+      libraries = libraries,
+    }
   end
   fail("Unknown test profile: " .. profile)
 end
@@ -316,6 +360,12 @@ local function build_c_tests()
     flags = flag_list(pkg_config("gtk+-3.0", "cflags")),
     libraries = flag_list(pkg_config("gtk+-3.0", "libs")),
   }
+  -- gdk-pixbuf downscales each image thumbnail. Present transitively via GTK,
+  -- but queried explicitly so the profile is honest about what it needs.
+  local gdk_pixbuf = {
+    flags = flag_list(pkg_config("gdk-pixbuf-2.0", "cflags")),
+    libraries = flag_list(pkg_config("gdk-pixbuf-2.0", "libs")),
+  }
   if #gtk.libraries == 0 then
     fail("GTK 3 development package not found: pkg-config gtk+-3.0")
   end
@@ -323,7 +373,7 @@ local function build_c_tests()
 
   for _, suite in ipairs(read_test_manifest()) do
     if suite.name ~= "metrics" then
-      local profile = test_profile_flags(suite.profile, glib, gtk, cairo, stub_dir)
+      local profile = test_profile_flags(suite.profile, glib, gtk, cairo, gdk_pixbuf, stub_dir)
       build_c_executable("test_" .. suite.name, suite.sources, {
         output = root .. "/build/test_" .. suite.name,
         includes = profile.includes,

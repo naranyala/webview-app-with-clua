@@ -23,6 +23,20 @@
  */
 size_t pdf_toc_count_characters(const char *text);
 
+/*
+ * The smallest ratio of a text run's measured height to the page's median body
+ * height at which the extractor will call that line a heading.
+ *
+ * Public because it is a contract with anything that *produces* a PDF this
+ * extractor will read - currently outline_pdf.c, whose heading sizes have to
+ * clear it or a level silently disappears from the reader's contents panel.
+ * Keep it in step with PDF_HEADING_MEDIUM_RATIO in pdf_toc.c; the test for the
+ * combined-outline renderer reads this rather than repeating the number, so
+ * retuning the heuristic moves the renderer's floor with it instead of leaving
+ * a hardcoded 1.25 to drift.
+ */
+#define PDF_HEADING_MIN_DETECT_RATIO 1.25
+
 /* One extracted heading. title is owned by the pdf_toc that holds it. */
 typedef struct {
     int page;

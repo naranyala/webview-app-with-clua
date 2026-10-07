@@ -17,6 +17,11 @@ function profile_cflags(profile) {
   if (profile == "gtk-stub") return "$(GTK_CFLAGS) -Itests/stubs"
   if (profile == "pdftotext") return "$(GLIB_CFLAGS) -DPDFTOTEXT_EXECUTABLE='\"pdftotext\"'"
   if (profile == "cairo") return "$(GTK_CFLAGS) $(CAIRO_CFLAGS) -Itests/stubs"
+  # GTK for app_support/webview-stub, gdk-pixbuf for the thumbnail decoder.
+  if (profile == "gtk-pixbuf") return "$(GTK_CFLAGS) $(GDK_PIXBUF_CFLAGS) -Itests/stubs"
+  # cairo + pdftotext: the renderer's sizes and the extractor's thresholds are
+  # only meaningful against each other, so the round-trip suite needs both.
+  if (profile == "cairo-pdftotext") return "$(CAIRO_CFLAGS) $(GLIB_CFLAGS) -DPDFTOTEXT_EXECUTABLE='\"pdftotext\"' -Itests/stubs"
   printf "tests-manifest.awk: unknown profile '%s'\n", profile > "/dev/stderr"
   exit 1
 }
@@ -26,18 +31,28 @@ function profile_libs(profile) {
   if (profile == "glib") return "$(GLIB_LIBS)"
   if (profile == "glib-math") return "$(GLIB_LIBS) -lm"
   if (profile == "gtk-stub") return "$(GTK_LIBS)"
+  if (profile == "gtk-pixbuf") return "$(GTK_LIBS) $(GDK_PIXBUF_LIBS)"
   if (profile == "pdftotext") return "$(GLIB_LIBS)"
   # GTK because the suite links app_support.c for return_native_error and the
   # shared chooser; cairo.pc declares no Requires, so glib is named explicitly
   # or the link fails on cairo's own undefined symbols. lround is libm.
   if (profile == "cairo") return "$(GTK_LIBS) $(CAIRO_LIBS) $(GLIB_LIBS) -lm"
+  # cairo.pc declares no Requires, so glib is named explicitly or the link fails
+  # on cairo's own undefined symbols.
+  if (profile == "cairo-pdftotext") return "$(CAIRO_LIBS) $(GLIB_LIBS) -lm"
   printf "tests-manifest.awk: unknown profile '%s'\n", profile > "/dev/stderr"
   exit 1
 }
 
 function profile_order(profile) {
-  # Only the pdf-toc suite shells out to an external tool.
-  return profile == "pdftotext" ? "| check-pdftotext" : ""
+  # Prerequisites are order-only: they must run before the build, and must not
+  # make the binary itself depend on a phony target's timestamp.
+  if (profile == "pdftotext") return "| check-pdftotext"
+  # The round-trip suite needs cairo *and* pdftotext, and the compile recipe
+  # below is not where its checks live, so both are declared here.
+  if (profile == "cairo-pdftotext") return "| check-cairo check-pdftotext"
+  if (profile == "gtk-pixbuf") return "| check-gdk-pixbuf"
+  return ""
 }
 
 BEGIN { print "# Generated from tests/MANIFEST by tools/tests-manifest.awk. Do not edit." }

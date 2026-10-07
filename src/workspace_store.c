@@ -16,6 +16,7 @@
 #include "json_io.h"
 
 #include <gio/gio.h>
+#include <glib/gstdio.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -66,6 +67,23 @@ char *workspace_store_load(const char *path, size_t *length_out,
     }
 
     /*
+     * The cap is checked from the file metadata first.
+     *
+     * g_file_get_contents allocates whatever the file holds, so checking the
+     * size afterwards means a multi-gigabyte workspace.json is fully read into
+     * memory and only then rejected as TOO_LARGE - and this runs on the GTK main
+     * thread, inside the loadWorkspace binding, so that allocation is a UI stall
+     * proportional to a file the user never meant to open. text_transfer.c has
+     * always done it this way (see its stat-then-read-then-recheck comment);
+     * this module was the one that skipped it.
+     */
+    GStatBuf info;
+    if (g_stat(path, &info) == 0 && (guint64)info.st_size > (guint64)WORKSPACE_STORE_MAX_BYTES) {
+        store_result_set(result, WORKSPACE_STORE_ERR_TOO_LARGE);
+        return NULL;
+    }
+
+    /*
      * g_file_get_contents replaces the fopen/fseek/ftell/malloc/fread dance
      * this used to spell out, and the "a missing file is not an error"
      * contract is now one error-code comparison rather than an errno check.
@@ -81,6 +99,7 @@ char *workspace_store_load(const char *path, size_t *length_out,
         return NULL;
     }
 
+    /* The file may have grown between the stat and the read. */
     if (length > WORKSPACE_STORE_MAX_BYTES) {
         g_free(contents);
         store_result_set(result, WORKSPACE_STORE_ERR_TOO_LARGE);

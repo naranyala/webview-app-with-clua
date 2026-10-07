@@ -10,7 +10,8 @@
  *   app_support.c         error replies, file URLs, picker dispatch, chooser
  *   pdf_toc.c             PDF heading extraction, cache, serialization
  *   pdf_session.c         openPdf + openPdfAt + extractPdfToc bindings
- *   image_directory.c     openImageDirectory + openImageDirectoryAt bindings
+ *   image_directory.c     openImageDirectory + openImageDirectoryAt bindings,
+ *                          plus loadImageAt for the lightbox
  *   outline_pdf.c         chooseOutlineDirectory + renderOutlinePdf bindings
  *   smoke.c               smokeVerdict verdict reporting for the smoke runner
  *   workspace_bindings.c  loadWorkspace + saveWorkspace bindings
@@ -230,6 +231,9 @@ int main(void) {
         goto fail;
 
     if (!check_webview_error("bind openImageDirectoryAt", webview_bind(app.view, "openImageDirectoryAt", on_open_image_directory_at, &app)))
+        goto fail;
+
+    if (!check_webview_error("bind loadImageAt", webview_bind(app.view, "loadImageAt", on_load_image_at, &app)))
         goto fail;
 
     if (!check_webview_error("bind chooseOutlineDirectory", webview_bind(app.view, "chooseOutlineDirectory", on_choose_outline_directory, &app)))

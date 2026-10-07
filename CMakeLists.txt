@@ -14,10 +14,20 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
 include(FetchContent)
+# The upstream commit for tag 0.12.0, not the tag itself: a tag is a mutable
+# reference, so two clean builds a week apart could resolve to different source.
+# This SHA is what `git rev-parse 0.12.0` returned, and it is still the tip as of
+# this writing -- `git describe --tags` on it reports "0.12.0". A shallow clone
+# of a bare commit works on GitHub, so GIT_SHALLOW stays on and a first build
+# still transfers one commit rather than the full history.
+#
+# To move to a newer release: resolve the tag first
+#   git ls-remote https://github.com/webview/webview.git refs/tags/<tag>
+# and paste the SHA here, so the pin and the reason for it stay in one place.
 FetchContent_Declare(
   webview
   GIT_REPOSITORY https://github.com/webview/webview.git
-  GIT_TAG 0.12.0
+  GIT_TAG 3ab4b5d722438fc8a13e6ca830c5e2372d19a01d
   GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(webview)
@@ -51,13 +61,23 @@ pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
 # Cairo writes the combined-outline PDF. It is already present transitively via
 # gtk+-3.0, but it is named explicitly so the profile is honest about the need.
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
+# The Image Viewer downscales thumbnails with gdk-pixbuf, so the desktop target
+# and its test suite both need it declared rather than picked up by luck.
+pkg_check_modules(GDK_PIXBUF REQUIRED IMPORTED_TARGET gdk-pixbuf-2.0)
 set(CMAKE_PROFILE_core "")
 set(CMAKE_PROFILE_glib "PkgConfig::GLIB")
 set(CMAKE_PROFILE_glib-math "PkgConfig::GLIB")
 set(CMAKE_PROFILE_gtk-stub "PkgConfig::GTK")
+# GTK for app_support and the webview stub; gdk-pixbuf for the image scan's
+# thumbnail decoder, which the suite links for real.
+set(CMAKE_PROFILE_gtk-pixbuf "PkgConfig::GTK;PkgConfig::GDK_PIXBUF")
 set(CMAKE_PROFILE_pdftotext "PkgConfig::GLIB")
 # GTK because the suite links app_support.c for the shared chooser; m for lround.
 set(CMAKE_PROFILE_cairo "PkgConfig::CAIRO;PkgConfig::GTK;m")
+# cairo + pdftotext, for the suite that renders an outline and reads it back
+# with the real extractor. No GTK: it drives cairo directly, not through a
+# binding. m for lround.
+set(CMAKE_PROFILE_cairo-pdftotext "PkgConfig::CAIRO;PkgConfig::GLIB;m")
 
 foreach (line IN LISTS manifest_lines)
   string(REGEX REPLACE "#.*" "" line "${line}")
@@ -90,10 +110,11 @@ foreach (line IN LISTS manifest_lines)
     if (profile STREQUAL "core")
       target_link_libraries(${target} PRIVATE m)
     endif()
-    if (profile STREQUAL "pdftotext")
+    if (profile STREQUAL "pdftotext" OR profile STREQUAL "cairo-pdftotext")
       target_compile_definitions(${target} PRIVATE PDFTOTEXT_EXECUTABLE="pdftotext")
     endif()
-    if (profile STREQUAL "gtk-stub" OR profile STREQUAL "cairo")
+    if (profile STREQUAL "gtk-stub" OR profile STREQUAL "cairo"
+        OR profile STREQUAL "cairo-pdftotext" OR profile STREQUAL "gtk-pixbuf")
       target_include_directories(${target} PRIVATE tests/stubs)
     endif()
     # The suites write fixtures under build/<suite>-test, so they must run from
@@ -103,7 +124,7 @@ foreach (line IN LISTS manifest_lines)
 endforeach()
 
 target_include_directories(metrics_desktop PRIVATE include)
-target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK PkgConfig::CAIRO)
+target_link_libraries(metrics_desktop PRIVATE webview::core_static PkgConfig::GTK PkgConfig::CAIRO PkgConfig::GDK_PIXBUF)
 set(FRONTEND_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend-vue")
 set(FRONTEND_HTML "${FRONTEND_DIR}/dist/index.html")
 set(FRONTEND_SOURCES

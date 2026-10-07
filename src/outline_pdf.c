@@ -20,7 +20,13 @@
 #include <cairo.h>
 #include <cairo-pdf.h>
 #include <glib/gstdio.h>
-#include <gtk/gtk.h>
+/*
+ * No GTK here, and that is deliberate rather than incidental. This file draws
+ * with cairo and answers over the webview; the only GTK it needs is the folder
+ * chooser, and that lives behind app_support.c's run_path_chooser, which is why
+ * this .c compiles and links with cairo and glib alone. The stale <gtk/gtk.h>
+ * was the only thing forcing a toolkit on a file that has no widget in it.
+ */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +52,42 @@
 /* An outline larger than this is not a document; refuse rather than grind. */
 #define MAX_ITEMS 10000
 
-static const double heading_sizes[3] = { 18.0, 15.0, 12.5 };
+/*
+ * Heading sizes, one per outline level (H1, H2, H3).
+ *
+ * These are not free choices. extractPdfToc in pdf_toc.c re-derives the outline
+ * from a rendered document using `pdftotext -tsv` font heights - it never reads
+ * a PDF outline tree - so a heading the renderer draws at a size the reader's
+ * heuristics reject does not appear in the preview's contents panel.
+ *
+ * The reader measures each text run's height and compares it with the median
+ * body height of the page (pdf_toc.c:227-233), calling a line a heading when
+ * PDF_HEADING_MEDIUM_RATIO (1.25) <= that ratio and the text is title-like.
+ * Note the ratio is measured, not nominal: pdftotext reports the ink bounding
+ * box of the run rather than the point size, so a 10.5pt body line measures
+ * about 14.3 and a 13.5pt heading about 18.4. Measured on a real render:
+ *
+ *   H1  18.0pt -> 1.71x    H2  15.0pt -> 1.43x    H3  12.5pt -> 1.19x
+ *   H3  13.5pt -> 1.29x    H3  14.0pt -> 1.33x
+ *
+ * H3 used to be 12.5, which is 1.19x: below the floor, so every H3 subsection
+ * silently vanished from the preview of a document that contained it. 13.5 is
+ * the smallest of the three that clears 1.25 with margin for font-metric
+ * rounding.
+ *
+ * The other gate is not this file's to satisfy. is_title_like (pdf_toc.c:114)
+ * accepts a heading only if it is all-caps or has no lower-case word start, so
+ * a sentence-case H3 like "A subsection here" is rejected on the text alone no
+ * matter how large it is drawn. That is a pre-existing reader heuristic, not
+ * something the renderer can fix by choosing a size, and it is why returning
+ * the outline structure in the binding reply - rather than making the reader
+ * re-derive it - is the real answer to a lossy preview.
+ *
+ * Nesting stays visible without relying on size alone: a deeper level is also
+ * indented (see draw_heading), so the levels remain distinguishable to a reader
+ * who cannot see the size difference.
+ */
+static const double heading_sizes[3] = { 18.0, 15.0, 13.5 };
 
 /*
  * The layout cursor and the page geometry, in one place, so the "does this line
