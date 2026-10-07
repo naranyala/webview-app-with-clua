@@ -1,0 +1,91 @@
+/*
+ * pdf.css - the PDF Reader: toolbar, sidebar outline, and page canvas.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- PDF Reader: toolbar, sidebar outline, page canvas, and states --- */
+
+/*
+ * The reader is toolbar, contents sidebar, page canvas. The sidebar is a real
+ * column rather than an overlay so the headings can be read and scrolled while
+ * the page stays visible beside it -- which is why closing it narrows the
+ * column instead of unmounting the pane: the panel keeps its scroll position
+ * and the canvas keeps a measured width, which the page renderer needs to lay
+ * its canvases out at all.
+ */
+.pdf-app {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  height: calc(var(--viewport-h) - var(--statusbar-h));
+  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
+  overflow: hidden;
+  background: #17191e;
+}
+.pdf-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 20px;
+  border-bottom: 1px solid #30343c;
+  background: #22252c;
+}
+.app-shell.pdf-active {
+  height: var(--viewport-h);
+  min-height: 0;
+  overflow: hidden;
+}
+/*
+ * The reader and the viewer used to shrink the header to 48px and grow their
+ * panes to match, to win vertical room for a page canvas. The bar is 30px now,
+ * so the override would have *cost* room: both panes simply subtract
+ * --statusbar-h like every other pane, and the two per-view rules are gone.
+ */
+.app-shell.pdf-active .pdf-toolbar {
+  min-height: 48px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.pdf-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+#pdf-name {
+  overflow: hidden;
+  color: #eef0f3;
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+.pdf-status {
+  color: #858c98;
+  font-size: 0.74rem;
+}
+.pdf-status.error {
+  color: #f2a6a6;
+}
+.toc-sidebar {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border-right: 1px solid #30343c;
+  background: #20232a;
+}

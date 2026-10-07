@@ -1,0 +1,217 @@
+/*
+ * sidebars.css - the collapsible sidebar behaviour shared by every pane.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- Collapsible sidebars -------------------------------------------------- */
+/*
+ * One vocabulary for all three panels -- the map's places list, the reader's
+ * contents, and the viewer's folders. `closed` on the panel hides it without
+ * unmounting it (so it keeps its scroll position) and `sidebar-closed` on the
+ * shell narrows the column it occupied.
+ *
+ * Above the narrow breakpoint that is the whole behaviour: the toggle is a
+ * convenience for reclaiming width, not a drawer. Below it, CSS promotes the
+ * panel to an overlay, because a 165px column beside a 195px canvas is not a
+ * reader.
+ */
+.toc-sidebar.closed,
+.image-sidebar.closed {
+  visibility: hidden;
+}
+.pdf-app.sidebar-closed,
+.image-app.sidebar-closed {
+  grid-template-columns: minmax(0, 1fr) 0;
+}
+/*
+ * The backdrop only exists while a panel is overlaid, so it is display:none
+ * above the breakpoint and never intercepts a click on a desktop. It is a
+ * button so it is reachable and announced, but it is tabindex="-1" so Tab skips
+ * it: the toggle in the toolbar is the keyboard route, and focus is moved into
+ * the panel itself rather than left on the backdrop.
+ */
+.sidebar-backdrop {
+  display: none;
+}
+.toc-heading {
+  display: grid;
+  gap: 5px;
+  padding: 17px 16px 13px;
+  border-bottom: 1px solid #30343c;
+}
+.toc-heading span {
+  color: #7f8794;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-heading strong {
+  color: #c8cdd5;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+.toc-panel {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #586174 #20232a;
+  scrollbar-width: thin;
+  padding: 8px;
+}
+.toc-message {
+  margin: 0;
+  padding: 16px 8px;
+  color: #777e8a;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+.toc-panel[data-state="loading"] .toc-message::before {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border: 2px solid #475569;
+  border-top-color: #8ab4f8;
+  border-radius: 50%;
+  content: "";
+  animation: toc-spin 0.8s linear infinite;
+}
+.toc-panel[data-state="error"] .toc-message {
+  color: #f2a6a6;
+}
+.toc-item {
+  display: block;
+  width: 100%;
+  padding: 8px 8px 8px calc(8px + (var(--toc-level) - 1) * 13px);
+  border-left: 2px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #adb3be;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-align: left;
+  cursor: pointer;
+}
+.toc-item:focus-visible,
+.toc-item.active {
+  border-left-color: #8ab4f8;
+  background: #2c333e;
+  color: #eef2f8;
+}
+.toc-item:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: -2px;
+}
+@media (hover: hover) {
+  .toc-item:hover {
+    border-left-color: #8ab4f8;
+    background: #2c333e;
+    color: #eef2f8;
+  }
+}
+.pdf-content {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #586174 #30343c;
+  scrollbar-width: thin;
+}
+.pdf-empty {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 15px;
+  padding: 36px;
+  text-align: center;
+}
+.pdf-empty h2 {
+  margin: 4px 0 0;
+  font-size: 1.3rem;
+}
+.pdf-large-icon {
+  display: grid;
+  width: 78px;
+  height: 98px;
+  place-items: center;
+  border-radius: 7px;
+  box-shadow: 0 14px 30px #08090b80;
+}
+.pdf-empty .toolbar-button {
+  margin-top: 8px;
+  padding: 9px 18px;
+}
+.pdf-rendered {
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  flex-direction: column;
+  background: #30343c;
+}
+.pdf-page-controls {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-bottom: 1px solid #444a55;
+  background: #252932;
+  color: #aeb5c0;
+  font-size: 0.74rem;
+}
+.pdf-page-controls .toolbar-button {
+  padding: 5px 9px;
+  font-size: 0.7rem;
+}
+.pdf-zoom-label {
+  margin-left: 12px;
+  color: #858c98;
+}
+.pdf-pages {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 16px 16px 32px;
+}
+.pdf-page {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+.pdf-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: none;
+  min-height: 0;
+  background: #fff;
+  box-shadow: 0 8px 24px #10121680;
+}
+.pdf-render-state {
+  align-self: center;
+  justify-self: center;
+  color: #d6d9e0;
+  font-size: 0.84rem;
+}
+.pdf-render-state.error {
+  color: #f2a6a6;
+}
+body [hidden] {
+  display: none;
+}
+@keyframes toc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -9,14 +9,10 @@
     <div id="root">
       <main class="app-shell">
         <header class="launcher-header">
-          <div class="brand">
-            <span class="brand-mark">N</span>
-            <div>
-              <span class="brand-name">Native Workspace</span>
-              <span class="brand-subtitle">Local tools, one workspace</span>
-            </div>
+          <div class="header-status">
+            <button class="toolbar-button subtle" id="back-to-menu" type="button">All apps</button>
+            <span class="app-title">Native Workspace</span>
           </div>
-          <button class="toolbar-button subtle" type="button">All apps</button>
         </header>
         <section class="app-menu" aria-label="Application menu">
           <div class="menu-heading">
@@ -62,6 +58,20 @@
               <span class="app-card-copy">
                 <strong>Map Explorer</strong>
                 <small>Pick a location on the map</small>
+              </span>
+              <span class="app-card-arrow" aria-hidden="true">›</span>
+            </button>
+            <!--
+              The sixth card. This static shell is the fallback the desktop smoke
+              run finds if Vue has not mounted, so it has to agree with
+              MenuView.vue on both the count and the ids; smoke.js checks
+              EXPECTED_MENU_CARDS against what is actually here.
+            -->
+            <button class="app-card" data-app="googlemap" type="button">
+              <span class="app-icon google-map-icon" aria-hidden="true">GM</span>
+              <span class="app-card-copy">
+                <strong>Google Maps</strong>
+                <small>Road, satellite, hybrid, or terrain</small>
               </span>
               <span class="app-card-arrow" aria-hidden="true">›</span>
             </button>

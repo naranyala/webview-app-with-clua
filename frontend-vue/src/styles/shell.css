@@ -1,0 +1,632 @@
+/*
+ * shell.css - the top bar, shared controls, the Text Editor, the app shell, the menu grid, and the TOC list.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- Top bar, shared toolbar buttons, and Text Editor panes --- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--topbar-h);
+  padding: var(--topbar-safe-top) 14px var(--topbar-safe-bottom);
+  border-bottom: 1px solid #2c3038;
+  background: #1b1e24;
+}
+.topbar-side,
+.top-actions,
+.editor-footer {
+  display: flex;
+  align-items: center;
+}
+.topbar-side {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.document-title {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #d3d7df;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.document-level {
+  padding: 2px 6px;
+  border: 1px solid #4a5262;
+  border-radius: 4px;
+  background: #2a2f3a;
+  color: #b9d3ff;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+#document-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top-actions {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.toolbar-button {
+  flex-shrink: 0;
+  padding: 6px 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #bdc3ce;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.toolbar-button.subtle {
+  border-color: #343a46;
+  background: #23262e;
+}
+@media (hover: hover) {
+  .toolbar-button.subtle:hover {
+    border-color: #454c5a;
+    background: #2b2f38;
+    color: #f0f1f4;
+  }
+}
+.toolbar-button.subtle:active {
+  background: #1f222a;
+}
+.toolbar-button.primary {
+  border-color: #8ab4f8;
+  background: #8ab4f8;
+  color: #182134;
+  font-weight: 700;
+}
+@media (hover: hover) {
+  .toolbar-button.primary:hover {
+    border-color: #a8c9ff;
+    background: #a8c9ff;
+  }
+}
+.toolbar-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.image-actions .toolbar-button:disabled,
+.pdf-toolbar .toolbar-button:disabled,
+.pdf-page-controls .toolbar-button:disabled {
+  cursor: wait;
+}
+.editor-pane {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 40px;
+  min-width: 0;
+  min-height: 0;
+  background: #1d1f25;
+}
+.editor-footer {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px;
+  border-top: 1px solid #262a31;
+  background: #191c22;
+  color: #868d9b;
+  font-size: 0.72rem;
+}
+#cursor-position {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+#document-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#editor-notice {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: #858c98;
+}
+#editor-notice.error {
+  color: #f2a6a6;
+}
+#values {
+  display: block;
+  width: min(100%, 780px);
+  min-height: 0;
+  margin: 0 auto;
+  resize: none;
+  padding: clamp(28px, 5vh, 56px) clamp(20px, 5vw, 44px) 96px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #e4e7ec;
+  caret-color: #8ab4f8;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.02rem, 1.4vw, 1.1rem);
+  line-height: 1.85;
+}
+#values::placeholder {
+  color: #7b8494;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.95rem;
+}
+#values::selection {
+  background: #405477;
+}
+/* --- Editor gate: pick an outline section before writing ------------------ */
+
+.toc-pick {
+  display: grid;
+  min-height: 0;
+  overflow: auto;
+  place-items: center;
+  padding: clamp(20px, 5vh, 48px) 20px;
+}
+.toc-pick-card {
+  display: grid;
+  width: min(100%, 540px);
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid #353a44;
+  border-radius: 10px;
+  background: #22262e;
+  box-shadow: 0 12px 32px #0b0c0f40;
+}
+.toc-pick-eyebrow {
+  color: #8ab4f8;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-pick-card h2 {
+  margin: 0;
+  color: #f0f2f5;
+  font-size: 1.15rem;
+}
+.toc-pick-hint {
+  margin: 0;
+  color: #858c98;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+.toc-pick-list {
+  display: grid;
+  max-height: min(46vh, 340px);
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.toc-pick-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #353a44;
+  border-radius: 8px;
+  background: #1c2027;
+  color: #d9dde4;
+  text-align: left;
+  cursor: pointer;
+}
+.toc-pick-item:focus-visible {
+  border-color: #6f8fbe;
+  background: #272d37;
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+}
+@media (hover: hover) {
+  .toc-pick-item:hover {
+    border-color: #6f8fbe;
+    background: #272d37;
+  }
+}
+.toc-pick-level {
+  padding: 3px 7px;
+  border: 1px solid #4a5162;
+  border-radius: 5px;
+  color: #aab3c2;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.toc-pick-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.toc-pick-copy strong {
+  overflow: hidden;
+  color: #f0f2f5;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toc-pick-copy small {
+  color: #858c98;
+  font-size: 0.72rem;
+}
+.toc-pick-empty {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 14px;
+  border: 1px dashed #3b414c;
+  border-radius: 8px;
+  text-align: center;
+}
+.toc-pick-empty h3 {
+  margin: 0;
+  color: #c8cdd5;
+  font-size: 0.9rem;
+}
+.toc-pick-empty p {
+  margin: 0;
+  color: #6f7683;
+  font-size: 0.75rem;
+}
+.toolbar-button:focus-visible,
+.toc-outline-remove:focus-visible,
+.toc-outline-move:focus-visible,
+.toc-outline-edit:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+}
+/* --- App shell: status bar, workspace report, and menu headings --- */
+
+.app-shell {
+  /*
+   * The bar is the first child in the template, because it was a header and the
+   * template has not been reordered. `order` puts it last without moving markup,
+   * which matters because the panes rely on DOM order for their v-show
+   * behaviour and the WebKit repaint watcher walks siblings in order.
+   */
+  display: flex;
+  flex-direction: column;
+  background: #17191e;
+}
+.launcher-header {
+  order: 1;
+}
+/*
+ * The status bar. It used to be a 72px header carrying a brand block, a
+ * subtitle, a workspace-report pill, and the "All apps" button, which is a lot
+ * of permanent vertical space for three static strings. It is now a 30px bar
+ * along the bottom: the "All apps" toggle first, then the app title as one
+ * line, and the workspace report only when there is something to report.
+ *
+ * `--statusbar-h` is the one number the panes subtract from --viewport-h, the
+ * same arrangement --topbar-h uses for the editor. It is a token rather than a
+ * literal because six rules read it: a literal 72px here and a literal 72px in
+ * every pane is exactly the pair that drifts. The device inset is added on top
+ * of the 30px of content rather than taken out of it, so on a notched phone the
+ * bar grows by the inset and the pane above loses exactly that much instead of
+ * the bar sliding under the home indicator.
+ */
+.launcher-header {
+  display: flex;
+  min-height: var(--statusbar-h);
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 16px var(--statusbar-safe-bottom);
+  border-top: 1px solid #2c3038;
+  background: #20232a;
+}
+/* The toggle leads, so it sits at the left edge; the title follows it. */
+.header-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+#back-to-menu {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 0.7rem;
+}
+/*
+ * The title, on one line. It replaces the brand block: the 25px "N" mark and the
+ * "Local tools, one workspace" subtitle were both static, and neither said
+ * anything the title does not. The mark survives on the menu's own heading,
+ * where it is the thing being looked at.
+ */
+.app-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #aab1bd;
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-report {
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 12px;
+  border: 1px solid #7d3f3f;
+  border-radius: 999px;
+  background: #2c1e1e;
+  color: #f2a6a6;
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-report-dismiss {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #f2a6a6;
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.app-menu {
+  min-height: calc(var(--viewport-h) - var(--statusbar-h));
+  padding: clamp(48px, 9vh, 96px) 28px;
+  background:
+    radial-gradient(circle at 50% 10%, #2b3341 0, transparent 38%), #191b20;
+}
+.menu-heading {
+  max-width: 620px;
+  margin: 0 auto 38px;
+  text-align: center;
+}
+.menu-heading > span,
+.pdf-eyebrow {
+  color: #8ab4f8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+.menu-heading h1 {
+  margin: 12px 0 8px;
+  color: #f0f2f5;
+  font-size: clamp(1.7rem, 4vw, 2.6rem);
+}
+.menu-heading p,
+.pdf-empty p {
+  margin: 0;
+  color: #858c98;
+  font-size: 0.92rem;
+}
+/* --- Menu grid and cards: one card per tool --- */
+
+.app-grid {
+  display: grid;
+  /*
+   * One column per tool, so a wide window is one row with nothing orphaned on a
+   * second. A fixed count left cards stranded when a tool was added, which is
+   * what happened twice: a fixed 4 stranded the fifth, and a fixed 5 stranded the
+   * Google viewer. auto-fit is deliberately not used — the breakpoints below
+   * already pick the column count, so one rule per width is easier to reason
+   * about than a fluid count.
+   */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  justify-content: center;
+  gap: 18px;
+  /*
+   * The cap on how wide the whole grid may get, and therefore on how wide one
+   * card may get, stated as a width rather than as a track size. 1590px is
+   * 6 x 250px plus 5 x 18px, so a wide window gets the same 250px cards it
+   * always did — the count grew with the tools and the cap grew with it.
+   *
+   * 1fr tracks plus this cap are what stop the menu overflowing a phone: the
+   * single-column tier used to be minmax(0, 330px), which reads like it can
+   * shrink but still needs 330px plus the .app-menu padding -- 362px, against a
+   * 320px floor, so a narrow phone scrolled the menu sideways. 1fr cannot
+   * exceed its container, and the tiers below narrow the cap with it.
+   */
+  max-width: 1590px;
+  margin-inline: auto;
+}
+.app-card {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 112px;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid #353a44;
+  border-radius: 10px;
+  background: #22262e;
+  color: #d9dde4;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 12px 32px #0b0c0f40;
+}
+.app-card:focus-visible,
+.app-card.active {
+  border-color: #6f8fbe;
+  background: #272d37;
+  transform: translateY(-1px);
+}
+/*
+ * The lift is the one hover effect that visibly sticks. A touch device keeps
+ * :hover latched on the last-tapped element until something else is tapped, so
+ * the card the user just chose stayed raised with a blue border, reading as
+ * "selected" long after they moved on.
+ */
+@media (hover: hover) {
+  .app-card:hover {
+    border-color: #6f8fbe;
+    background: #272d37;
+    transform: translateY(-1px);
+  }
+}
+.app-card:focus-visible,
+.launcher-header button:focus-visible,
+.pdf-toolbar button:focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 3px;
+}
+.app-icon {
+  display: grid;
+  width: 58px;
+  height: 72px;
+  place-items: center;
+  border-radius: 5px;
+  font-weight: 800;
+}
+.text-icon {
+  border: 1px solid #566a89;
+  background: #283143;
+  color: #b9d3ff;
+  font-family: Georgia, serif;
+  font-size: 1.3rem;
+}
+.pdf-icon,
+.pdf-large-icon,
+.image-icon,
+.image-large-icon {
+  border: 1px solid #85525c;
+  background: #412b32;
+  color: #ffbdc4;
+  font-size: 0.78rem;
+}
+.app-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+.app-card-copy strong {
+  overflow: hidden;
+  color: #f0f2f5;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-card-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #858c98;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.app-card-arrow {
+  flex-shrink: 0;
+  color: #667080;
+  font-size: 1.7rem;
+}
+.toc-manager-icon {
+  border: 1px solid #7a6a45;
+  background: #3a3220;
+  color: #f4d9a0;
+  font-size: 0.72rem;
+}
+/* --- TOC Manager: toolbar, outline list, link panel, and empty state --- */
+
+.toc-manager {
+  display: grid;
+  min-height: calc(var(--viewport-h) - var(--statusbar-h));
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #17191e;
+}
+.toc-manager-toolbar {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 20px;
+  border-bottom: 1px solid #30343c;
+  background: #22252c;
+}
+.toc-manager-toolbar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.toc-manager-eyebrow {
+  color: #7f8794;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-manager-toolbar strong {
+  overflow: hidden;
+  color: #c8cdd5;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toc-manager-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+}
+.toc-manager-status {
+  color: #858c98;
+  font-size: 0.74rem;
+}
+.toc-manager-status.error {
+  color: #f2a6a6;
+}
+.toc-manager-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  min-height: 0;
+  padding: 20px;
+}
+.toc-outline {
+  display: grid;
+  width: min(100%, 940px);
+  gap: 12px;
+  margin-inline: auto;
+  padding: 18px;
+  border: 1px solid #353a44;
+  border-radius: 10px;
+  background: #22262e;
+  box-shadow: 0 12px 32px #0b0c0f40;
+}
+.toc-outline-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.toc-outline-heading span:first-child {
+  color: #7f8794;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-outline-heading span:last-child {
+  color: #667080;
+  font-size: 0.72rem;
+}

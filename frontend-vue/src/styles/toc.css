@@ -1,0 +1,276 @@
+/*
+ * toc.css - the TOC management surface: create bar, filter, and inline edit.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- TOC management surface: create bar, filter, inline edit --------------- */
+
+.toc-declare-bar {
+  display: flex;
+  gap: 8px;
+}
+.toc-declare-bar input,
+.toc-filter input,
+.toc-edit input,
+.toc-edit select,
+.toc-link-panel select,
+.lightbox-attach select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #3b414c;
+  border-radius: 6px;
+  outline: none;
+  background: #191c22;
+  color: #e5e9ef;
+  font-size: 0.85rem;
+}
+.toc-declare-bar input {
+  flex: 1;
+  min-width: 0;
+}
+.toc-declare-bar select {
+  flex-shrink: 0;
+  width: auto;
+}
+.toc-declare-bar input:focus,
+.toc-filter input:focus,
+.toc-edit input:focus,
+.toc-edit select:focus {
+  border-color: #8ab4f8;
+}
+.toc-declare-bar .toolbar-button {
+  flex-shrink: 0;
+}
+.toc-bar-hint {
+  margin: 0;
+  color: #6f7683;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+.toc-filter input {
+  width: 100%;
+}
+.toc-edit {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.toc-edit input {
+  flex: 1;
+  min-width: 160px;
+}
+.toc-edit select {
+  flex-shrink: 0;
+  width: auto;
+}
+.toc-outline-no-match {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px;
+  border: 1px dashed #3b414c;
+  border-radius: 8px;
+  text-align: center;
+}
+.toc-outline-no-match p {
+  margin: 0;
+  color: #858c98;
+  font-size: 0.8rem;
+}
+.toc-undo {
+  color: #8ab4f8;
+}
+.toc-outline {
+  gap: 14px;
+}
+.toc-outline-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.toc-link-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid #30343c;
+  background: #1c1f25;
+}
+.toc-link-title {
+  color: #7f8794;
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.toc-link-panel select,
+.lightbox-attach select {
+  width: 100%;
+  min-width: 0;
+}
+.toc-link-panel .toolbar-button,
+.lightbox-attach .toolbar-button {
+  width: 100%;
+}
+.toc-outline-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 10px 2px calc(8px + (var(--toc-level) - 1) * 14px);
+  border: 1px solid #353a44;
+  border-left: 2px solid transparent;
+  border-radius: 7px;
+  background: #1e222a;
+}
+.toc-outline-item.active {
+  border-color: #6f8fbe;
+  border-left-color: #8ab4f8;
+  background: #272d37;
+}
+@media (hover: hover) {
+  .toc-outline-item:hover {
+    border-color: #6f8fbe;
+    border-left-color: #8ab4f8;
+    background: #272d37;
+  }
+}
+.toc-outline-select {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px 0;
+  background: transparent;
+  color: #cbd0d8;
+  text-align: left;
+  cursor: pointer;
+}
+.toc-outline-title {
+  overflow: hidden;
+  color: #eef0f3;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toc-outline-select small {
+  color: #7f8794;
+  font-size: 0.7rem;
+}
+.toc-outline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.toc-outline-link {
+  padding: 3px 7px;
+  border: 1px solid #3f5068;
+  border-radius: 999px;
+  background: #232b38;
+  color: #b9d3ff;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+.toc-outline-link:focus-visible {
+  border-color: #8ab4f8;
+  background: #2b3646;
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+}
+@media (hover: hover) {
+  .toc-outline-link:hover {
+    border-color: #8ab4f8;
+    background: #2b3646;
+  }
+}
+.toc-outline-level {
+  padding: 3px 7px;
+  border: 1px solid #3b414c;
+  border-radius: 999px;
+  color: #9aa3b1;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+}
+.toc-outline-remove {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: transparent;
+  color: #7f8794;
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .toc-outline-remove:hover {
+    background: #303846;
+    color: #f2a6a6;
+  }
+}
+.toc-outline-move,
+.toc-outline-edit {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: transparent;
+  color: #7f8794;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .toc-outline-move:hover,
+  .toc-outline-edit:hover {
+    background: #303846;
+    color: #b9d3ff;
+  }
+}
+.toc-outline-move:disabled {
+  background: transparent;
+  color: #7f8794;
+  opacity: 0.35;
+  cursor: default;
+}
+.toc-outline-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 44px 18px;
+  text-align: center;
+}
+.toc-outline-empty-icon {
+  display: grid;
+  width: 70px;
+  height: 88px;
+  place-items: center;
+  border: 1px solid #7a6a45;
+  border-radius: 7px;
+  background: #3a3220;
+  color: #f4d9a0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  box-shadow: 0 14px 30px #08090b80;
+}
+.toc-outline-empty h2 {
+  margin: 6px 0 0;
+  font-size: 1.15rem;
+}
+.toc-outline-empty p {
+  margin: 0;
+  max-width: 46ch;
+  color: #858c98;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}

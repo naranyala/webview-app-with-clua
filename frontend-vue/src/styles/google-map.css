@@ -1,0 +1,300 @@
+/*
+ * google-map.css - the Google Maps Viewer.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- Google Maps Viewer: a render-only Google Maps tile viewer --- */
+.google-map-app {
+  display: grid;
+  height: calc(var(--viewport-h) - var(--statusbar-h));
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-rows: 54px auto minmax(0, 1fr);
+  background: #1d1f25;
+}
+.google-map-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 18px;
+  border-bottom: 1px solid #2b2f37;
+  background: #22262e;
+}
+.google-map-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.google-map-options {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  border-bottom: 1px solid #2b2f37;
+  background: #1f232a;
+}
+.google-map-options select {
+  min-width: 0;
+}
+.google-map-canvas {
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+  grid-column: 1;
+  background: #1a1c20;
+}
+.google-map-canvas.panning {
+  cursor: grabbing;
+}
+.google-map-tile-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.google-map-surface {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.google-map-grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, #ffffff38 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff38 1px, transparent 1px);
+  pointer-events: none;
+  z-index: 1;
+}
+.google-map-cursor-readout {
+  position: absolute;
+  right: 10px;
+  bottom: 26px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: #17191ed9;
+  color: #e6e9ee;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  pointer-events: none;
+  z-index: 2;
+}
+.google-map-scale-bar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+  z-index: 2;
+}
+.google-map-scale-rule {
+  display: block;
+  height: 3px;
+  border: 1px solid #ffffff80;
+  border-top: none;
+  background: #ffffff40;
+}
+.google-map-scale-label {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #17191ecc;
+  color: #e6e9ee;
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+.google-map-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: #17191ee6;
+  color: #e6e9ee;
+  font-size: 0.85rem;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+}
+.google-map-attribution {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  font-size: 0.6rem;
+  color: #ffffff90;
+  z-index: 2;
+}
+.google-map-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: #e6e9ee;
+}
+.google-map-empty h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+.google-map-empty p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #9aa0a8;
+}
+.google-map-zoom-label {
+  min-width: 36px;
+  text-align: center;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  color: #9aa0a8;
+}
+.google-map-eyebrow {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #7a8090;
+}
+.google-map-toolbar strong {
+  font-size: 0.92rem;
+  color: #d9dde4;
+}
+.google-map-sidebar {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-left: 1px solid #2b2f37;
+  background: #1f232a;
+  overflow-y: auto;
+}
+.google-map-sidebar-heading {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #7a8090;
+}
+.google-map-url-form {
+  display: flex;
+  gap: 8px;
+}
+.google-map-url-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid #353a44;
+  border-radius: 4px;
+  background: #15171b;
+  color: #d9dde4;
+  font-size: 0.82rem;
+}
+.google-map-url-form input:focus {
+  outline: none;
+  border-color: #6f8fbe;
+}
+.google-map-actions {
+  display: flex;
+  gap: 8px;
+}
+.google-map-place-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.google-map-place-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #2b2f37;
+  border-radius: 4px;
+  background: #22262e;
+}
+.google-map-place-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.google-map-place-info strong {
+  font-size: 0.82rem;
+  color: #d9dde4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.google-map-place-info small {
+  font-size: 0.7rem;
+  color: #7a8090;
+}
+.google-map-place-action {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9aa0a8;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+/*
+ * Guarded by `hover: hover`, and `:not(:disabled)` on each, exactly as
+ * `map-places.css` does it for the Explorer's equivalent buttons.
+ *
+ * These two rules were the only unguarded `:hover` selectors in the stylesheet.
+ * An unguarded `:hover` matches on a touch device the moment a finger lands, so
+ * the delete button showed its red "pressed" state while being tapped and then
+ * stayed there after the tap ended — the state was reporting a hover that never
+ * happened. tests/responsive-layout.test.js asserts no unguarded hover survives,
+ * which is what it was written for and what this file had been failing.
+ */
+/*
+ * The focus twin of the hover rule below, and for the same reason: a hover
+ * affordance with no keyboard equivalent tells a keyboard user the control is
+ * there only by not telling them. Same shape as `.map-place-action:focus-visible`
+ * in the Explorer's stylesheet.
+ */
+.google-map-place-action:focus-visible {
+  background: #353a44;
+  color: #d9dde4;
+  outline: 2px solid #6f8cff;
+  outline-offset: 1px;
+}
+@media (hover: hover) {
+  .google-map-place-action:hover:not(:disabled) {
+    background: #353a44;
+    color: #d9dde4;
+  }
+  .google-map-place-action.danger:hover:not(:disabled) {
+    background: #4a2020;
+    color: #e88;
+  }
+}
+.google-map-place-empty {
+  font-size: 0.78rem;
+  color: #7a8090;
+  line-height: 1.5;
+}

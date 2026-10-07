@@ -1,0 +1,374 @@
+/*
+ * map-places.css - the places sidebar, plus the combined-PDF bar that happens to sit above it in the original file.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- combined-outline PDF bar --------------------------------------------- */
+/*
+ * Sits under the TOC Manager toolbar and reports where the combined file went.
+ * The folder path is the long, unbounded part, so it takes the space and
+ * ellipsizes while the status and the preview button keep their size.
+ */
+.outline-pdf-bar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 20px;
+  border-bottom: 1px solid #2b2f37;
+  background: #1f232a;
+}
+.outline-pdf-label {
+  min-width: 0;
+  max-width: 46ch;
+  color: #aeb5c0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+.outline-pdf-status {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #858c98;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- the places sidebar ----------------------------------------------------- */
+.map-sidebar {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border-left: 1px solid #30343c;
+  background: #20232a;
+}
+.map-sidebar.closed {
+  visibility: hidden;
+}
+.map-sidebar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 13px 7px;
+  color: #858c98;
+  font-size: 0.7rem;
+  letter-spacing: 0.09em;
+}
+.map-sidebar-heading strong {
+  color: #c8ced8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+}
+.map-sidebar-actions {
+  display: flex;
+  gap: 7px;
+  padding: 0 13px 8px;
+}
+.map-sidebar-actions .toolbar-button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.map-place-status {
+  min-width: 0;
+  padding: 0 13px 8px;
+  color: #858c98;
+  font-size: 0.74rem;
+}
+.map-place-editing-hint,
+.map-place-empty {
+  padding: 0 13px 10px;
+  color: #6b7280;
+  font-size: 0.74rem;
+}
+.map-place-list {
+  display: grid;
+  min-height: 0;
+  gap: 5px;
+  margin: 0;
+  padding: 0 9px 12px;
+  overflow-y: auto;
+  list-style: none;
+}
+.map-place-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid #353a44;
+  border-radius: 7px;
+  background: #22262e;
+}
+.map-place-row.active {
+  border-color: #4a7fd4;
+}
+/*
+ * The selected place is what the cursor readout measures against, so it needs to
+ * be distinguishable from the place the pin happens to be on - a different
+ * question, and a state that would otherwise look the same on screen.
+ */
+.map-place-row.selected {
+  border-color: #4a7fd4;
+  box-shadow: inset 2px 0 0 #7fb0ff;
+}
+.map-place-open {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.map-place-open strong {
+  overflow: hidden;
+  color: #d9dde4;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-place-open small {
+  color: #858c98;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+}
+.map-place-buttons {
+  display: flex;
+  gap: 4px;
+}
+.map-place-action {
+  padding: 3px 6px;
+  border: 1px solid #3f4652;
+  border-radius: 5px;
+  background: #262b34;
+  color: #b6bcc6;
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+.map-place-action:focus-visible {
+  border-color: #6f8cff;
+  color: #dfe4ec;
+  outline: 2px solid #6f8cff;
+  outline-offset: 1px;
+}
+@media (hover: hover) {
+  .map-place-action:hover:not(:disabled) {
+    border-color: #6f8cff;
+    color: #dfe4ec;
+  }
+  .map-place-action.danger:hover:not(:disabled) {
+    border-color: #a1483f;
+    color: #f0b4ae;
+  }
+}
+.map-place-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.map-place-edit {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 5px;
+}
+.map-place-edit input {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid #3f4652;
+  border-radius: 5px;
+  background: #1b1e24;
+  color: #d9dde4;
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 1400px) {
+  /* Five 250px cards plus gaps need ~1400px; below that, three per row. */
+  .app-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-width: 936px;
+  }
+}
+@media (max-width: 1100px) {
+  .app-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 678px;
+  }
+}
+@media (max-width: 900px) {
+  /* Below this the sidebar would leave the map too narrow to pan in, so it
+     overlays the canvas instead of taking a column. */
+  .map-app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .map-sidebar {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 280px;
+    box-shadow: -12px 0 28px #0009;
+  }
+  .map-app.sidebar-closed .map-sidebar {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .topbar {
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .document-title {
+    text-align: left;
+  }
+  #values {
+    padding: 24px 18px 72px;
+  }
+  .top-actions {
+    gap: 4px;
+  }
+  /*
+   * Narrower, so the labels fit -- but not smaller: shrinking the type here is
+   * what took .toolbar-button from 30.8px to 29.6px on the devices that most
+   * need the target. The floor is the `pointer: coarse` block below.
+   */
+  /* biome-ignore lint/style/noDescendingSpecificity: the base .toolbar-button
+     rules are in shell.css, which the cascade reaches first; this only looks like
+     a descent because the linter reads one file at a time. */
+  .toolbar-button {
+    padding: 6px 8px;
+    font-size: 0.72rem;
+  }
+  .app-menu {
+    padding: 42px 16px;
+  }
+  .app-grid {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 330px;
+    gap: 12px;
+  }
+  .image-actions {
+    display: grid;
+    justify-items: end;
+  }
+  .image-status {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .image-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+    padding: 10px;
+  }
+  .image-thumbnail img {
+    height: 110px;
+  }
+  .lightbox {
+    padding: 64px 44px 20px;
+  }
+  .lightbox img {
+    max-height: calc(var(--viewport-h) - 112px);
+  }
+  .lightbox-nav {
+    width: 38px;
+    height: 38px;
+  }
+  .lightbox-nav.previous {
+    left: 4px;
+  }
+  .lightbox-nav.next {
+    right: 4px;
+  }
+  /*
+   * The reader and the viewer promote their sidebars to overlays, which is the
+   * pattern .map-app already used at 900px. A 165px column beside a 195px canvas
+   * is not a reader; an overlay gives the page the whole width and dismisses
+   * with a tap on the backdrop or the toolbar toggle.
+   */
+  .pdf-app,
+  .image-app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pdf-app.sidebar-closed,
+  .image-app.sidebar-closed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .toc-sidebar,
+  .image-sidebar {
+    position: absolute;
+    z-index: 4;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, 82vw);
+    border-right: 1px solid #3a4049;
+    box-shadow: 12px 0 28px #0009;
+  }
+  /*
+   * visibility:hidden rather than display:none, so the panel keeps its scroll
+   * position across a close -- the same reason the map narrows its column
+   * instead of unmounting. The buttons inside stay out of the tab order.
+   */
+  .toc-sidebar.closed,
+  .image-sidebar.closed {
+    display: none;
+  }
+  .sidebar-backdrop {
+    position: absolute;
+    z-index: 3;
+    inset: 0;
+    display: block;
+    border: 0;
+    background: #00000073;
+    cursor: pointer;
+  }
+  .app-shell.pdf-active .pdf-toolbar {
+    align-items: flex-start;
+    padding: 10px 12px;
+  }
+  .pdf-actions {
+    display: grid;
+    justify-items: end;
+  }
+  .pdf-status {
+    max-width: 170px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .toc-manager-body {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 12px;
+  }
+  .toc-manager-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .toc-manager-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .toc-manager-status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

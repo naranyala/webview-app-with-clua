@@ -1,0 +1,161 @@
+/*
+ * responsive.css - phone density and coarse-pointer touch targets.
+ *
+ * Part of the workspace stylesheet, split out of the single index.css because it had
+ * grown past 2800 lines. Concatenation order is load-bearing and is preserved by
+ * the @import list in index.css; the regions here are contiguous slices of the old
+ * file, so nothing moved and no rule changed its specificity relative to its
+ * neighbours.
+ */
+
+/* --- Phone density --------------------------------------------------------- */
+/*
+ * Below 480px the menu stops being a desktop grid scaled down and becomes a
+ * phone list.
+ *
+ * At the desktop density the five cards alone are 632px -- 5 x 112px plus four
+ * 18px gaps -- which with the heading and padding is about 866px, so an iPhone SE
+ * (667px) had to scroll to reach the fifth tool. The 112px card and its 58x72
+ * icon are sized for a pointer, not for a thumb on a list row.
+ *
+ * The whole menu now costs about 586px, so all five tools are reachable without
+ * scrolling, and the 480px line is where that starts: a 690px tablet keeps the
+ * roomier card because it has the height to spare.
+ */
+@media (max-width: 480px) {
+  .app-menu {
+    padding: 24px 16px 32px;
+  }
+  .menu-heading {
+    margin-bottom: 20px;
+  }
+  .menu-heading h1 {
+    margin: 8px 0 6px;
+  }
+  .app-grid {
+    gap: 12px;
+  }
+  .app-card {
+    /*
+     * The three tracks are 58px icon / 1fr / arrow with 16px gaps and 20px of
+     * padding, which leaves about 190px of copy at 330px wide. At a 288px-wide
+     * phone column that becomes about 148px, and the 1rem title starts clipping,
+     * so the icon track and both gaps shrink with it.
+     */
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 76px;
+    padding: 12px 14px;
+  }
+  .app-icon {
+    width: 44px;
+    height: 52px;
+    font-size: 0.72rem;
+  }
+  .app-card-copy {
+    gap: 4px;
+  }
+  .app-card-copy small {
+    /*
+     * The desktop card clamps the badge to two lines inside a 112px card. At
+     * 76px there is room for two lines of 0.76rem at 1.45 line-height plus the
+     * title, so the clamp stays -- the card is a fixed height, and an
+     * unclamped third line would push the arrow out of the card.
+     */
+    font-size: 0.72rem;
+    line-height: 1.4;
+  }
+  .app-card-arrow {
+    font-size: 1.4rem;
+  }
+}
+/* --- Touch targets ------------------------------------------------------- */
+/*
+ * 44px is the smallest reliably tappable target (iOS HIG; Android's a11y guidance
+ * asks for 48dp). Almost nothing in this sheet reaches it on a mouse-sized
+ * pointer: .toolbar-button computes to 30.8px, the outline row's remove and
+ * move buttons to 28px, .map-place-action to about 20px, and the 700px tier
+ * above *shrinks* .toolbar-button to 29.6px -- the layout got tighter on exactly
+ * the devices that need bigger targets.
+ *
+ * This is keyed on the pointer, not the width, so a narrow desktop window keeps
+ * its dense layout and a tablet at any size gets the roomier one. A touch laptop
+ * reports both; the coarse branch simply wins for its own controls.
+ */
+@media (pointer: coarse) {
+  /*
+   * min-height rather than height, and no padding change: a button with a longer
+   * label then grows instead of clipping, and the row it sits in is a flex or
+   * grid track that already sizes to content. Padding is left alone so the
+   * narrow-window rules above still decide how much room the label takes.
+   */
+  .toolbar-button {
+    min-height: 44px;
+  }
+  .toc-pick-item,
+  .recent-path,
+  .image-group-button {
+    min-height: 44px;
+  }
+  /*
+   * The square controls are sized in both axes, and min-width matters as much as
+   * min-height here: they are 28px circles with no padding to grow into.
+   */
+  .toc-outline-remove,
+  .toc-outline-move,
+  .toc-outline-edit,
+  .workspace-report-dismiss {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .lightbox-close,
+  .lightbox-nav {
+    width: 44px;
+    height: 44px;
+  }
+  .map-place-action {
+    min-height: 44px;
+    font-size: 0.74rem;
+  }
+  /*
+   * The form controls share one rule already, so raising their height here is
+   * one selector rather than five. 0.85rem is also below the 16px iOS zooms the
+   * viewport on when a field is focused, so this fixes that too.
+   */
+  .toc-declare-bar input,
+  .toc-filter input,
+  .toc-edit input,
+  .toc-edit select,
+  .toc-link-panel select,
+  .lightbox-attach select,
+  .map-options select {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+  /*
+   * The outline row's text buttons have almost no height of their own -- 3px of
+   * vertical padding on a 0.85rem line -- so they rely on the row for their hit
+   * area and need explicit room once the row is only as tall as its content.
+   */
+  .toc-outline-link,
+  .toc-item {
+    min-height: 44px;
+  }
+  .toc-outline-item {
+    padding-block: 6px;
+  }
+  .map-place-row {
+    padding-block: 12px;
+  }
+  /*
+   * The thumbnail and card grids are already large enough to tap; only the
+   * caption row inside a thumbnail is not, and it is part of the same button.
+   */
+  .image-thumbnail {
+    padding: 10px;
+  }
+  /* A tap is the only way to dismiss the workspace report on a phone. */
+  .workspace-report-dismiss {
+    font-size: 1.2rem;
+  }
+}
