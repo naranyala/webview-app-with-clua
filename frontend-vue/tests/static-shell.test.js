@@ -10,6 +10,12 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
+import {
+  styles as allStyles,
+  importedStyleFiles,
+  STYLE_PARTS,
+  styleFilesOnDisk,
+} from './support/styles.mjs';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const readAll = (directory, extension) =>
@@ -20,15 +26,19 @@ const readAll = (directory, extension) =>
     .join('\n');
 
 /*
- * The Vue app is split across App.vue (composition + template) and its
- * session modules, so contract assertions read the whole composition layer.
- * The native host is split across src/*.c with prototypes in include/*.h.
+ * The Vue app is split across App.vue (composition and the shell), one component
+ * per pane, and the session modules, so contract assertions read the whole
+ * composition layer together. The panes were extracted into components because
+ * App.vue had grown past two thousand lines; every assertion here that used to
+ * pass over the inline markup now passes over the aggregate, and it is the
+ * aggregate rather than App.vue alone that keeps them meaningful.
+ *
+ * The component list is discovered rather than written out, so adding a pane
+ * cannot silently fall outside the contracts. tests/template-bindings.test.js
+ * covers the same files for template-to-binding resolution.
  */
 const shellModules = [
   '../src/app-shell.js',
-  '../src/components/LightboxDialog.vue',
-  '../src/components/MenuView.vue',
-  '../src/components/StatusLine.vue',
   '../src/boot-state.js',
   '../src/editor-session.js',
   '../src/file-io.js',
@@ -38,7 +48,14 @@ const shellModules = [
   '../src/toc-outline.js',
   '../src/workspace-report.js',
 ];
-const component = [read('../src/App.vue'), ...shellModules.map(read)].join(
+const vueComponents = [
+  '../src/App.vue',
+  ...readdirSync(new URL('../src/components/', import.meta.url))
+    .filter((name) => name.endsWith('.vue'))
+    .sort()
+    .map((name) => `../src/components/${name}`),
+];
+const component = [...vueComponents.map(read), ...shellModules.map(read)].join(
   '\n',
 );
 const template = read('../public/index.html');
@@ -46,7 +63,8 @@ const config = read('../rsbuild.config.js');
 const store = read('../src/workspace.js');
 /* The persistence engine, whose behaviour tests/workspace-persistence.test.js owns. */
 const persistence = read('../src/workspace-persistence.js');
-const styles = read('../src/index.css');
+/* The rules in cascade order; index.css is now an @import list. */
+const styles = allStyles;
 const nativeHost = `${readAll('../../src', '.c')}\n${readAll(
   '../../include',
   '.h',
@@ -224,6 +242,49 @@ test('Assistive-only labels and native file inputs stay out of the layout', () =
   }
 });
 
+test('The reader and viewer sidebars are collapsible, like the map places panel', () => {
+  /*
+   * The map promoted its places panel to an overlay below 900px; the reader and
+   * the viewer only narrowed their columns, leaving a 360px phone a 195px page
+   * canvas. They now use the same vocabulary: a toolbar toggle, an
+   * `aria-controls` link to the panel, a `sidebar-closed` class on the shell,
+   * and a backdrop that only exists while the panel is overlaid.
+   */
+  for (const text of [
+    'id="pdf-toggle-sidebar"',
+    'id="image-toggle-sidebar"',
+    'id="pdf-sidebar"',
+    'id="image-sidebar"',
+    'aria-controls="pdf-sidebar"',
+    'aria-controls="image-sidebar"',
+    ':aria-expanded="pdfSidebarOpen"',
+    ':aria-expanded="imageSidebarOpen"',
+    'class="sidebar-backdrop"',
+    '@click="togglePdfSidebar"',
+    '@click="toggleImageSidebar"',
+    // The panels stay mounted: `closed` hides them, and closing narrows the
+    // column rather than removing the pane, so scroll position and the page
+    // renderer's measured width both survive.
+    ':class="{ \'sidebar-closed\': !pdfSidebarOpen }"',
+    ':class="{ \'sidebar-closed\': !imageSidebarOpen }"',
+    ':class="{ closed: !pdfSidebarOpen }"',
+    ':class="{ closed: !imageSidebarOpen }"',
+  ]) {
+    assert.match(component, new RegExp(escapePattern(text)));
+  }
+  // The backdrop is a dismiss affordance, not a tab stop: the toolbar toggle is
+  // the keyboard route.
+  assert.match(component, /class="sidebar-backdrop"[\s\S]*?tabindex="-1"/);
+  for (const text of [
+    '.toc-sidebar.closed',
+    '.image-sidebar.closed',
+    '.pdf-app.sidebar-closed',
+    '.sidebar-backdrop',
+  ]) {
+    assert.match(styles, new RegExp(escapePattern(text)));
+  }
+});
+
 test('Menu cards and tools show live cross-tool state', () => {
   for (const text of [
     '{{ editorBadge }}',
@@ -312,10 +373,23 @@ test('Text editor is a plain writing surface bound to the outline', () => {
     'id="back-to-outline"',
     'previousTocItem && selectTocItem(previousTocItem)',
     'spellcheck="true"',
-    'auto-saved',
   ]) {
     assert.match(component, new RegExp(escapePattern(text)));
   }
+
+  /*
+   * The footer still says where the workspace is being kept, but the phrase moved
+   * out of App.vue when the panes were extracted: it is now saveLabelFor() in the
+   * persistence module, because both the shell's badge and the editor's status bar
+   * want the same sentence and the engine is a per-instance object neither should
+   * reach into. Asserting the wording against App.vue alone would now fail for a
+   * refactor that made it shareable.
+   */
+  for (const text of ['auto-saved', 'saved to disk', 'not saved']) {
+    assert.match(persistence, new RegExp(escapePattern(text)));
+  }
+  /* And the editor's status bar still renders it. */
+  assert.match(component, /saveLabel/);
   for (const text of [
     'Run metrics',
     'id="calculate"',
@@ -696,4 +770,42 @@ test('The reader pane can be scrolled with the keyboard', () => {
   assert.match(region[0], /tabindex="0"/);
   assert.match(region[0], /role="region"/);
   assert.match(region[0], /aria-label="PDF pages"/);
+});
+
+/*
+ * The stylesheet was one 2871-line file and is now an ordered @import list. The
+ * rules are unchanged and their order is unchanged - the files are contiguous
+ * slices of the old file - so cascade behaviour is identical. What is new is a way
+ * for a file to be added to the directory and never imported, which would be
+ * silently dead CSS, or imported out of order, which would quietly change which
+ * rule wins. Both are checked here rather than by review.
+ */
+test('the stylesheet import list is complete and in cascade order', () => {
+  assert.deepEqual(
+    importedStyleFiles(),
+    STYLE_PARTS,
+    'index.css must import every partial, in the order the tests concatenate them',
+  );
+  assert.deepEqual(
+    styleFilesOnDisk(),
+    [...STYLE_PARTS].sort(),
+    'a partial on disk but not imported is dead CSS',
+  );
+});
+
+test('the concatenated stylesheet is the size the single file was', () => {
+  /*
+   * A cheap guard against a slice losing its tail. The old file was 2871 lines and
+   * the partials carry the same rules plus one comment header each, so the
+   * concatenated text has to be at least as long as the original.
+   */
+  assert.ok(
+    allStyles.length > 40_000,
+    `the concatenated stylesheet looks truncated: ${allStyles.length} characters`,
+  );
+  /* It still opens with the design tokens - the first slice - and ends with the
+     Google viewer's last rule, which is what a lost tail on either end would
+     break. */
+  assert.match(allStyles.slice(0, 2_000), /:root\s*\{/);
+  assert.match(allStyles.trimEnd(), /\}\s*$/);
 });

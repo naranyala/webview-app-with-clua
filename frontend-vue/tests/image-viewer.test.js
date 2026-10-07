@@ -11,6 +11,8 @@ import {
   imageGroupFromRelativePath,
   imagesFromFileList,
   MAX_BROWSER_TOTAL_SIZE,
+  makeThumbnail,
+  THUMBNAIL_MAX_EDGE,
 } from '../src/image-viewer.js';
 
 test('common image extensions are recognized case-insensitively', () => {
@@ -98,6 +100,132 @@ test('a file larger than the per-file budget is still rejected', async () => {
     ]);
     assert.equal(result.images.length, 0);
     assert.equal(result.oversized, 1);
+  } finally {
+    restore();
+  }
+});
+
+/*
+ * Thumbnails. The whole point of the change is that the grid holds a downscaled
+ * copy rather than the original, because the grid renders at 140px tall and a
+ * 12 MP photo is ~120 MB of base64 across a collection.
+ */
+
+/* A canvas stand-in: enough surface for makeThumbnail to drive. */
+function stubCanvas({ toDataURL = 'data:image/jpeg;base64,thumb' } = {}) {
+  const drawn = [];
+  return {
+    drawn,
+    element: () => ({
+      width: 0,
+      height: 0,
+      getContext: () => ({
+        fillRect: () => {},
+        drawImage: (_bitmap, _x, _y, w, h) => drawn.push({ w, h }),
+      }),
+      toDataURL: () => toDataURL,
+    }),
+  };
+}
+
+const bitmapOf = (width, height) => ({
+  width,
+  height,
+  close() {},
+});
+
+test('makeThumbnail scales the long edge to the thumbnail size', async () => {
+  const canvas = stubCanvas();
+  const thumbnail = makeThumbnail(async () => bitmapOf(4032, 3024), {
+    createElement: canvas.element,
+  });
+  const result = await thumbnail({});
+  assert.equal(result.width, THUMBNAIL_MAX_EDGE);
+  assert.equal(result.height, 240, '4032x3024 becomes 320x240, aspect kept');
+  assert.match(result.dataUrl, /^data:image\/jpeg/);
+});
+
+test('makeThumbnail scales a portrait on its long edge too', async () => {
+  const canvas = stubCanvas();
+  const thumbnail = makeThumbnail(async () => bitmapOf(3000, 4000), {
+    createElement: canvas.element,
+  });
+  const result = await thumbnail({});
+  assert.equal(result.width, 240);
+  assert.equal(result.height, THUMBNAIL_MAX_EDGE);
+});
+
+test('makeThumbnail never upscales a small image', async () => {
+  const canvas = stubCanvas();
+  const thumbnail = makeThumbnail(async () => bitmapOf(200, 150), {
+    createElement: canvas.element,
+  });
+  const result = await thumbnail({});
+  // dataUrl null means "use the original", which is right for a small image:
+  // re-encoding it smaller would cost bytes and add nothing.
+  assert.equal(result.dataUrl, null);
+  assert.equal(result.width, 200);
+  assert.equal(
+    canvas.drawn.length,
+    0,
+    'nothing was drawn, so nothing was re-encoded',
+  );
+});
+
+test('makeThumbnail reports failure rather than throwing when it cannot decode', async () => {
+  const failing = makeThumbnail(
+    async () => {
+      throw new Error('unsupported format');
+    },
+    { createElement: () => ({}) },
+  );
+  assert.equal(await failing({}), null);
+
+  // No createImageBitmap at all: the same answer, so the caller falls back.
+  const absent = makeThumbnail(undefined, undefined);
+  assert.equal(await absent({}), null);
+});
+
+test('imagesFromFileList prefers a thumbnail over the original bytes', async () => {
+  const restore = stubFileReader();
+  try {
+    const canvas = stubCanvas();
+    const thumbnail = makeThumbnail(async () => bitmapOf(4032, 3024), {
+      createElement: canvas.element,
+    });
+    const result = await imagesFromFileList(
+      [
+        {
+          name: 'photo.jpg',
+          size: 300 * 1024,
+          webkitRelativePath: 'trip/photo.jpg',
+        },
+      ],
+      { thumbnail },
+    );
+    assert.equal(result.images.length, 1);
+    // The grid reads `thumbnail`; the original was never read, so the stubbed
+    // FileReader's data URL is not what the image carries.
+    assert.equal(result.images[0].thumbnail, 'data:image/jpeg;base64,thumb');
+    assert.equal(result.images[0].width, THUMBNAIL_MAX_EDGE);
+    assert.equal(result.fallbacks, 0, 'nothing needed the original');
+  } finally {
+    restore();
+  }
+});
+
+test('imagesFromFileList falls back to the original and says so', async () => {
+  const restore = stubFileReader();
+  try {
+    // No thumbnail function, as in a plain-node test or an environment with no
+    // createImageBitmap: the image must still appear, and the reply must admit
+    // that it is carrying full-resolution bytes.
+    const result = await imagesFromFileList([
+      { name: 'photo.jpg', size: 1024, webkitRelativePath: 'photo.jpg' },
+    ]);
+    assert.equal(result.images.length, 1);
+    assert.equal(result.images[0].thumbnail, 'data:image/png;base64,stub');
+    assert.equal(result.fallbacks, 1);
   } finally {
     restore();
   }

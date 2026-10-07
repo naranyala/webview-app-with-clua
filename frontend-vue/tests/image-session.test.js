@@ -7,11 +7,11 @@
 
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-
 import {
   activeLightboxImage,
   changeLightbox,
   closeLightbox,
+  createImageSession,
   handleLightboxKeydown,
   imageDirectoryInput,
   imageDirectoryName,
@@ -36,6 +36,28 @@ import {
   visibleImages,
 } from '../src/image-session.js';
 import { MAX_RECENT_PATHS } from '../src/workspace.js';
+
+/* A boot snapshot with nothing restored, so a fresh session starts empty. */
+const emptyBoot = () => ({
+  view: 'menu',
+  toc: { items: [], activeId: null, drafts: {} },
+  editor: { content: '', title: '' },
+  pdf: { name: '', page: 1, zoom: 1, recentPaths: [] },
+  images: {
+    directoryName: '',
+    directoryPath: '',
+    selectedGroup: '',
+    recentPaths: [],
+  },
+  places: [],
+});
+
+/* Two microtask turns: the fetch is one await inside the session. */
+const settle = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 const originalWindow = globalThis.window;
 
@@ -62,10 +84,20 @@ after(() => {
   delete globalThis.FileReader;
 });
 
+/*
+ * A scanned image now carries a downscaled `thumbnail` plus the `path` the
+ * lightbox asks for, and no longer carries the original's bytes. `dataUrl` is
+ * kept alongside so the tests below that only care about identity still read a
+ * recognisable string; the native scan no longer sends it.
+ */
 const photo = (name, folder = 'photos') => ({
   name,
   relativePath: `${folder}/${name}`,
-  dataUrl: `data:image/png;base64,${name}`,
+  path: `/photos/${folder}/${name}`,
+  thumbnail: `data:image/jpeg;base64,thumb-${name}`,
+  width: 320,
+  height: 240,
+  dataUrl: `data:image/jpeg;base64,thumb-${name}`,
 });
 
 test('installing a collection filters, groups, and reports the count', () => {
@@ -407,4 +439,151 @@ test('the status helper records its error flag', () => {
 
   setImageStatus('failed', true);
   assert.equal(imageStatusError.value, true);
+});
+
+/*
+ * The lightbox is the only view that shows an image larger than a thumbnail, so
+ * it is the only one that fetches the original. These cover that fetch and the
+ * fact that it is released again, because a full-size data URL held per image is
+ * the exact memory this change removed from the grid.
+ */
+test('a collection of thumbnails is accepted where originals used to be', () => {
+  setImageCollection(
+    [
+      {
+        name: 'a.png',
+        relativePath: 'p/a.png',
+        thumbnail: 'data:image/jpeg;base64,t',
+      },
+      // A host that predates the field still renders.
+      {
+        name: 'b.png',
+        relativePath: 'p/b.png',
+        dataUrl: 'data:image/png;base64,b',
+      },
+    ],
+    'Holidays',
+  );
+  assert.equal(imageFiles.value.length, 2);
+});
+
+test('opening the lightbox fetches the full-size image by path', async () => {
+  const asked = [];
+  const session = createImageSession({
+    boot: emptyBoot(),
+    doc: { querySelector: () => null },
+    native: (name) => {
+      if (name !== 'loadImageAt') return null;
+      return (path) => {
+        asked.push(path);
+        return { ok: true, dataUrl: `data:image/jpeg;base64,full-${path}` };
+      };
+    },
+  });
+  const [first, second] = [photo('a.png'), photo('b.png')];
+  session.setImageCollection([first, second], 'Holidays');
+
+  session.openLightbox(second);
+  await settle();
+  assert.deepEqual(asked, ['/photos/photos/b.png']);
+  assert.equal(
+    session.lightboxFullSizeUrl.value,
+    'data:image/jpeg;base64,full-/photos/photos/b.png',
+  );
+});
+
+test('stepping never holds two full-size images at once', async () => {
+  // A full-resolution data URL is the memory this change took out of the grid, so
+  // the lightbox must not reintroduce it by accumulating. Observed at the instant
+  // after the step, before the new fetch resolves: the old URL must already be
+  // gone, or the previous image is still resident while the next loads.
+  const pending = [];
+  const session = createImageSession({
+    boot: emptyBoot(),
+    doc: { querySelector: () => null },
+    native: (name) =>
+      name === 'loadImageAt'
+        ? (path) =>
+            new Promise((resolve) => {
+              pending.push(() =>
+                resolve({
+                  ok: true,
+                  dataUrl: `data:image/jpeg;base64,full-${path}`,
+                }),
+              );
+            })
+        : null,
+  });
+  const [first, second] = [photo('a.png'), photo('b.png')];
+  session.setImageCollection([first, second], 'Holidays');
+
+  session.openLightbox(first);
+  pending.shift()?.();
+  await settle();
+  assert.match(session.lightboxFullSizeUrl.value, /a\.png/);
+
+  // Step while the next fetch is still in flight: only one URL may be held.
+  session.changeLightbox(1);
+  assert.equal(
+    session.lightboxFullSizeUrl.value,
+    '',
+    'the previous full-size image is still resident while the next loads',
+  );
+  assert.equal(session.lightboxFullSizeLoading.value, true);
+  pending.shift()?.();
+  await settle();
+  assert.match(session.lightboxFullSizeUrl.value, /b\.png/);
+});
+
+test('closing the lightbox releases the full-size image', async () => {
+  const session = createImageSession({
+    boot: emptyBoot(),
+    doc: { querySelector: () => null },
+    native: (name) =>
+      name === 'loadImageAt'
+        ? () => ({ ok: true, dataUrl: 'data:image/jpeg;base64,full' })
+        : null,
+  });
+  session.setImageCollection([photo('a.png')], 'Holidays');
+  session.openLightbox(session.imageFiles.value[0]);
+  await settle();
+  assert.ok(session.lightboxFullSizeUrl.value.length > 0);
+  session.closeLightbox();
+  assert.equal(session.lightboxFullSizeUrl.value, '');
+  assert.equal(session.lightboxFullSizeLoading.value, false);
+});
+
+test('without a host the lightbox keeps the thumbnail and does not fail', async () => {
+  // The browser preview has no loadImageAt binding. The thumbnail stays, which is
+  // the whole image there, and nothing is reported as broken.
+  const session = createImageSession({
+    boot: emptyBoot(),
+    doc: { querySelector: () => null },
+    native: () => null,
+  });
+  session.setImageCollection([photo('a.png')], 'Holidays');
+  session.openLightbox(session.imageFiles.value[0]);
+  await settle();
+  assert.equal(session.lightboxImage.value?.name, 'a.png');
+  assert.equal(session.lightboxFullSizeUrl.value, '');
+});
+
+test('a failed full-size fetch leaves the thumbnail in place', async () => {
+  const session = createImageSession({
+    boot: emptyBoot(),
+    doc: { querySelector: () => null },
+    native: (name) =>
+      name === 'loadImageAt'
+        ? () => {
+            throw new Error('the file moved');
+          }
+        : null,
+  });
+  session.setImageCollection([photo('a.png')], 'Holidays');
+  session.openLightbox(session.imageFiles.value[0]);
+  await settle();
+  // No full-size URL, but the lightbox is still showing the image.
+  assert.equal(session.lightboxFullSizeUrl.value, '');
+  assert.equal(session.lightboxImage.value?.name, 'a.png');
+  assert.equal(session.lightboxFullSizeLoading.value, false);
 });

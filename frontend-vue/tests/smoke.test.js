@@ -15,24 +15,29 @@ import {
   checkSummarize,
   checkSummarizeRejects,
   checkWorkspaceRoundTrip,
+  EXPECTED_MENU_CARDS,
+  REQUIRED_ANCHORS,
   runDesktopSmoke,
   smokeMayPersist,
   smokeRequested,
 } from '../src/smoke.js';
 
-const SMOKE_ANCHORS = [
-  '.app-shell',
-  '.app-grid',
-  '.toc-manager-toolbar',
-  '#toc-manager-status',
-  '.toc-pick',
-  '.editor-app',
-  '.pdf-app',
-  '.image-app',
-  '.map-app',
-];
+/*
+ * What the smoke check requires the rendered shell to contain.
+ *
+ * Read from `REQUIRED_ANCHORS` rather than written out, because this fixture
+ * stands in for the real document and a second copy of the list is a second thing
+ * to forget. It was written out, it fell behind when the sixth tool was added, and
+ * the result was a fixture that claimed to be the real shell and was missing a
+ * whole pane — which is the same class of error this test file exists to catch,
+ * one level down.
+ */
+const SMOKE_ANCHORS = REQUIRED_ANCHORS;
 
-function fakeDocument({ missing = [], cards = 5 } = {}) {
+/* Six cards, matching EXPECTED_MENU_CARDS. */
+const MENU_CARDS = EXPECTED_MENU_CARDS;
+
+function fakeDocument({ missing = [], cards = MENU_CARDS } = {}) {
   const present = new Set(SMOKE_ANCHORS);
   for (const selector of missing) present.delete(selector);
   return {
@@ -105,7 +110,7 @@ describe('DOM check', () => {
     assert.deepEqual(checkDom(fakeDocument()), {
       name: 'dom-anchors',
       ok: true,
-      detail: '9 anchors, 5 menu cards',
+      detail: `${REQUIRED_ANCHORS.length} anchors, ${EXPECTED_MENU_CARDS} menu cards`,
     });
   });
 

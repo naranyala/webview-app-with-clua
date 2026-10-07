@@ -46,6 +46,10 @@ function fakeSessions() {
     mapRenderer: ref('dom'),
     mapShowGrid: ref(false),
     mapShowCursor: ref(true),
+    googleMapLayer: ref('m'),
+    googleMapRenderer: ref('dom'),
+    googleMapShowGrid: ref(false),
+    googleMapShowCursor: ref(true),
   };
 }
 
@@ -161,7 +165,91 @@ describe('the snapshot', () => {
         showGrid: false,
         showCursor: true,
       },
+      googleMap: {
+        layer: 'm',
+        renderer: 'dom',
+        showGrid: false,
+        showCursor: true,
+      },
     });
+  });
+
+  /*
+   * The Google viewer's options are a separate session from the Explorer's, so
+   * they get their own block rather than more fields on `map`: folded together,
+   * a workspace could hold an Explorer filter and a Google renderer under one
+   * name with nothing to say which tool each belongs to.
+   */
+  test('remembers the Google viewer layer and its view options', () => {
+    const sessions = fakeSessions();
+    sessions.googleMapLayer.value = 'y';
+    sessions.googleMapRenderer.value = 'canvas';
+    sessions.googleMapShowGrid.value = true;
+    sessions.googleMapShowCursor.value = false;
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    const snapshot = engine.snapshot();
+
+    assert.equal(snapshot.googleMap.layer, 'y');
+    assert.equal(snapshot.googleMap.renderer, 'canvas');
+    assert.equal(snapshot.googleMap.showGrid, true);
+    assert.equal(snapshot.googleMap.showCursor, false);
+    /* And the Explorer is untouched by any of it. */
+    assert.equal(snapshot.map.filter, 'none');
+    assert.equal(snapshot.map.renderer, 'dom');
+  });
+
+  test('restores the Google viewer options', () => {
+    const sessions = fakeSessions();
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    assert.equal(
+      engine.apply({
+        ...engine.snapshot(),
+        googleMap: {
+          layer: 't',
+          renderer: 'canvas',
+          showGrid: true,
+          showCursor: false,
+        },
+      }),
+      true,
+    );
+
+    assert.equal(sessions.googleMapLayer.value, 't');
+    assert.equal(sessions.googleMapRenderer.value, 'canvas');
+    assert.equal(sessions.googleMapShowGrid.value, true);
+    assert.equal(sessions.googleMapShowCursor.value, false);
+  });
+
+  test('a workspace with no googleMap block still restores', () => {
+    const sessions = fakeSessions();
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    assert.equal(
+      engine.apply({ ...engine.snapshot(), googleMap: undefined }),
+      true,
+    );
+    assert.equal(sessions.googleMapLayer.value, 'm', 'kept its own default');
+    assert.equal(sessions.googleMapRenderer.value, 'dom');
+    /* The Explorer restores regardless - that is the point of the guard. */
+    assert.equal(sessions.mapFilter.value, 'none');
+  });
+
+  test('a stored Google layer that is not on the closed list is refused', () => {
+    const sessions = fakeSessions();
+    const engine = build(fakeStore(), undefined, { sessions });
+
+    engine.apply({
+      ...engine.snapshot(),
+      googleMap: { layer: 'satellite-ish' },
+    });
+
+    assert.equal(
+      sessions.googleMapLayer.value,
+      'm',
+      'an unknown name would build a tile URL with no badge or styling',
+    );
   });
 
   test('remembers the map view options and the saved places', () => {
