@@ -23,10 +23,19 @@
  *   isEnabled()     false in DOM mode, where this renderer must do nothing
  *   tileSource()    the URL for a tile
  *   getContext()    the 2D context, or null before the canvas is laid out
+ *   getGeoJSON()    the visible layers, for callers that want this renderer to
+ *                   derive the shapes itself
+ *   getShapes()     pre-computed shapes, preferred when supplied. The session
+ *                   computes them once for both renderers, so passing them here
+ *                   is what guarantees the canvas and the SVG overlay cannot
+ *                   drift - the alternative is two derivations of the same
+ *                   geometry, which is the drift.
  *
  * `createImage` and the scheduler are injected so the whole thing runs in node,
  * which has neither an Image constructor nor requestAnimationFrame.
  */
+
+import { geojsonShapes } from './map-geojson-view.js';
 export function createCanvasRenderer({
   getTiles,
   getTransform,
@@ -34,6 +43,9 @@ export function createCanvasRenderer({
   isEnabled,
   tileSource,
   getContext,
+  getGeoJSON,
+  getShapes,
+  getTileZoom,
   createImage = () => new globalThis.Image(),
   animate = (fn) =>
     globalThis.requestAnimationFrame?.(fn) ?? setTimeout(fn, 16),
@@ -129,6 +141,17 @@ export function createCanvasRenderer({
       if (image?.complete !== true || image.naturalWidth === 0) continue;
       context.drawImage(image, tile.left, tile.top, tileSize, tileSize);
     }
+    if (getShapes) {
+      drawShapes(context, getShapes());
+    } else if (getGeoJSON) {
+      drawGeoJSON(
+        context,
+        getGeoJSON(),
+        transform,
+        tileSize,
+        getTileZoom?.() ?? 0,
+      );
+    }
     context.setTransform(1, 0, 0, 1, 0, 0);
   }
 
@@ -147,4 +170,46 @@ export function createCanvasRenderer({
     dispose,
     imageCount: () => images.size,
   };
+}
+
+/* --- GeoJSON rendering --------------------------------------------------- */
+
+/*
+ * Draws the same shapes the SVG overlay draws, from the same functions - see
+ * map-geojson-view.js for why the conversion is not inlined here. Walking the
+ * shapes rather than the features is what keeps a polygon filled in one
+ * renderer and stroked in the other from being possible.
+ */
+function drawShapes(context, shapes) {
+  if (!shapes || shapes.circles.length + shapes.paths.length === 0) return;
+  const { circles, paths } = shapes;
+
+  for (const circle of circles) {
+    context.beginPath();
+    context.arc(circle.x, circle.y, circle.r, 0, Math.PI * 2);
+    context.fillStyle = circle.color;
+    context.fill();
+  }
+  for (const path of paths) {
+    context.beginPath();
+    path.points.forEach((point, index) => {
+      if (index === 0) context.moveTo(point.x, point.y);
+      else context.lineTo(point.x, point.y);
+    });
+    if (path.closed) context.closePath();
+    context.strokeStyle = path.color;
+    context.fillStyle = path.color;
+    context.lineWidth = path.strokeWidth;
+    if (path.closed) context.fill();
+    context.stroke();
+  }
+}
+
+/*
+ * The fallback for a caller that hands over layers rather than shapes. The
+ * session does not use it - it passes getShapes() so both renderers draw the
+ * identical geometry - but a caller with layers and nothing else still works.
+ */
+function drawGeoJSON(context, layers, transform, tileSize, tileZoom) {
+  drawShapes(context, geojsonShapes({ layers, transform, tileSize, tileZoom }));
 }

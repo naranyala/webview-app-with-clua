@@ -23,6 +23,10 @@ const props = defineProps({
   linkTargetId: { type: String, default: null },
   /** The resolved link target item, or null. */
   linkTarget: { type: Object, default: null },
+  /** Full-resolution data URL, empty until the host answers. */
+  fullSizeUrl: { type: String, default: '' },
+  /** A full-size fetch is in flight. */
+  loadingFullSize: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['close', 'step', 'attach', 'update:linkTargetId']);
@@ -99,7 +103,18 @@ onBeforeUnmount(() => {
       ‹
     </button>
     <figure>
-      <img :src="image.dataUrl" :alt="image.name" />
+      <!--
+        The full-resolution image, fetched when the lightbox opened
+        (image-session.js). `fullSizeUrl` is empty until it arrives, and while it
+        is the thumbnail stays on screen, so stepping through a folder never
+        shows an empty frame. Outside the desktop host there is no binding to ask
+        and the thumbnail is what there is.
+      -->
+      <img
+        :src="fullSizeUrl || image.thumbnail || image.dataUrl"
+        :alt="image.name"
+        :class="{ loading: loadingFullSize && !fullSizeUrl }"
+      />
       <figcaption>
         {{ image.relativePath }}<span v-if="total > 0"> · {{ position }} of {{ total }}</span>
       </figcaption>

@@ -113,6 +113,105 @@ export function createMapPlaces({
     return place;
   }
 
+  /*
+   * Saves many places at once, from an imported file.
+   *
+   * Deliberately built by folding the *same* rules addPlace() applies rather than
+   * by writing a second set: the coordinate validator, the coordinate dedupe, the
+   * label length cap, and MAX_SAVED_PLACES. A bulk path with its own rules is how
+   * a collection ends up able to hold two places at one coordinate, or 250 of
+   * them, depending on which path added it.
+   *
+   * Reports what happened rather than just what succeeded: imported, already
+   * present, refused for a bad coordinate, and stopped by the cap. A file of 300
+   * sites into a 200-place collection has to say "100 of these were dropped",
+   * because a silent truncation looks like the file was wrong.
+   */
+  function addPlaces(candidates) {
+    const rows = Array.isArray(candidates) ? candidates : [];
+    let imported = 0;
+    let alreadyThere = 0;
+    let refused = 0;
+    let overCap = 0;
+
+    /* Working on a copy and committing once at the end: addPlace() writes state
+       and a status message per call, so folding two hundred rows through it would
+       produce two hundred saves of the whole workspace and two hundred status
+       messages, of which only the last would ever be seen. */
+    const working = [...places.value];
+    const savedAt = now();
+
+    for (const candidate of rows) {
+      const coordinates = normalizeLocation({
+        lat: candidate?.lat,
+        lon: candidate?.lon,
+      });
+      const name = String(candidate?.label ?? '')
+        .trim()
+        .slice(0, MAX_PLACE_LABEL);
+      if (!coordinates || !name) {
+        refused += 1;
+        continue;
+      }
+      if (
+        working.some(
+          (place) =>
+            place.lat === coordinates.lat && place.lon === coordinates.lon,
+        )
+      ) {
+        alreadyThere += 1;
+        continue;
+      }
+      if (working.length >= MAX_SAVED_PLACES) {
+        overCap += 1;
+        continue;
+      }
+      /* Same construction as addPlace(), for the same reason: the schema owns id
+         minting, and normalizeLocation's own `label` must not overwrite the name. */
+      const place = normalizePlace({
+        ...coordinates,
+        label: name,
+        createdAt: savedAt,
+      });
+      if (!place) {
+        refused += 1;
+        continue;
+      }
+      working.push(place);
+      imported += 1;
+    }
+
+    if (imported > 0) places.value = working;
+
+    const parts = [];
+    if (imported > 0) {
+      parts.push(
+        `Imported ${imported} place${imported === 1 ? '' : 's'}. ${working.length} total.`,
+      );
+    }
+    if (alreadyThere > 0) {
+      parts.push(`${alreadyThere} already saved.`);
+    }
+    if (refused > 0) {
+      parts.push(
+        `${refused} skipped for want of a name or a usable coordinate.`,
+      );
+    }
+    if (overCap > 0) {
+      parts.push(
+        `${overCap} dropped: the list holds at most ${MAX_SAVED_PLACES}.`,
+      );
+    }
+    /* Nothing imported and something refused is the case that needs a loud
+       failure: the reader asked for places and got none. */
+    const onlyRefusals = imported === 0 && (refused > 0 || overCap > 0);
+    setPlaceStatus(
+      parts.join(' ') || 'Nothing in that file was a usable place.',
+      onlyRefusals,
+    );
+    return { imported, alreadyThere, refused, overCap };
+  }
+
   /* Renames in place, keeping position and coordinates. */
   function renamePlace(id, label) {
     const place = findPlace(id);
@@ -194,6 +293,7 @@ export function createMapPlaces({
     setPlaceStatus,
     findPlace,
     addPlace,
+    addPlaces,
     renamePlace,
     removePlace,
     clearPlaces,
@@ -215,6 +315,7 @@ export const editingPlaceId = session.editingPlaceId;
 export const setPlaceStatus = session.setPlaceStatus;
 export const findPlace = session.findPlace;
 export const addPlace = session.addPlace;
+export const addPlaces = session.addPlaces;
 export const renamePlace = session.renamePlace;
 export const removePlace = session.removePlace;
 export const clearPlaces = session.clearPlaces;

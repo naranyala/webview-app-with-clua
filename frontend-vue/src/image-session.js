@@ -9,7 +9,11 @@ import { computed, nextTick, ref } from 'vue';
 
 import { restoredWorkspace } from './boot-state.js';
 import { withFileTransfer } from './file-io.js';
-import { groupImages, imagesFromFileList } from './image-viewer.js';
+import {
+  groupImages,
+  imagesFromFileList,
+  makeThumbnail,
+} from './image-viewer.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
 import { MAX_RECENT_PATHS } from './workspace.js';
 
@@ -43,6 +47,14 @@ export function createImageSession({
   const imageStatus = ref('Choose a parent directory to find images.');
   const imageStatusError = ref(false);
   const imageLoading = ref(false);
+  /*
+   * Whether the folders sidebar is showing. Above the narrow breakpoint it is a
+   * real grid column and this is only ever true; below it, the sidebar overlays
+   * the thumbnail grid so a phone gets the full width instead of a 145px column
+   * beside it. The panel is never unmounted, so it keeps its scroll position --
+   * the same reasoning as the map's `sidebar-closed`.
+   */
+  const imageSidebarOpen = ref(true);
 
   /* --- lightbox ------------------------------------------------------------- */
 
@@ -74,10 +86,17 @@ export function createImageSession({
   /*
    * Installs a new result set, keeps the selected group when it still exists,
    * and reports how many images were accepted.
+   *
+   * `thumbnail` is what the grid shows and `dataUrl` is kept as a fallback for a
+   * host that predates the field, so a stale bundle still renders. The image's
+   * own `path` is what the lightbox asks for when it needs full resolution --
+   * the host no longer sends the original bytes for every image, which is the
+   * point: a collection of 12 MP photos was ~120 MB of base64 held for the
+   * whole session to fill 187x140 boxes.
    */
   function setImageCollection(images, directoryName) {
     const normalized = Array.isArray(images)
-      ? images.filter((image) => image?.dataUrl)
+      ? images.filter((image) => image?.thumbnail || image?.dataUrl)
       : [];
     imageFiles.value = normalized;
     imageGroups.value = groupImages(normalized);
@@ -138,10 +157,46 @@ export function createImageSession({
 
   /* --- lightbox controls ---------------------------------------------------- */
 
+  /*
+   * The lightbox is the only view that shows an image larger than a thumbnail,
+   * so it is the only one that needs the original bytes. The scan sends a
+   * downscaled thumbnail per image; the full-resolution data URL is fetched here,
+   * one image at a time, and dropped again on close.
+   *
+   * While the fetch is in flight the lightbox keeps showing the thumbnail, so
+   * stepping through a folder never shows an empty frame. Outside the desktop
+   * host there is no binding, so the thumbnail stays - the browser path has no
+   * absolute path to ask about, and it already sent full-size data URLs.
+   */
+  const lightboxFullSizeUrl = ref('');
+  const lightboxFullSizeLoading = ref(false);
+
+  async function loadLightboxFullSize(image) {
+    lightboxFullSizeUrl.value = '';
+    lightboxFullSizeLoading.value = false;
+    const path = String(image?.path ?? '');
+    if (!path) return;
+    const load = native('loadImageAt');
+    if (!load) return;
+    lightboxFullSizeLoading.value = true;
+    const outcome = await withFileTransfer(() => call(() => load(path)), {
+      report: () => {},
+      messages: {
+        error: 'The full-size image could not be loaded.',
+      },
+    });
+    lightboxFullSizeLoading.value = false;
+    if (outcome.status === 'done') {
+      const dataUrl = String(outcome.result?.dataUrl || '');
+      if (dataUrl) lightboxFullSizeUrl.value = dataUrl;
+    }
+  }
+
   function openLightbox(image) {
     lightboxIndex.value = visibleImages.value.indexOf(image);
     if (lightboxIndex.value >= 0) {
       lightboxImage.value = image;
+      loadLightboxFullSize(image);
       defer(() => theDoc().querySelector('.lightbox')?.focus());
     }
   }
@@ -152,11 +207,17 @@ export function createImageSession({
       (lightboxIndex.value + offset + visibleImages.value.length) %
       visibleImages.value.length;
     lightboxImage.value = visibleImages.value[lightboxIndex.value];
+    // loadLightboxFullSize clears the previous URL synchronously, before its own
+    // first await, so stepping never holds two full-resolution images at once.
+    // Holding the arrow key therefore cannot accumulate them.
+    loadLightboxFullSize(lightboxImage.value);
   }
 
   function closeLightbox() {
     lightboxImage.value = null;
     lightboxIndex.value = -1;
+    lightboxFullSizeUrl.value = '';
+    lightboxFullSizeLoading.value = false;
   }
 
   function handleLightboxKeydown(event) {
@@ -175,7 +236,19 @@ export function createImageSession({
     imageLoading.value = true;
     setImageStatus('Reading images…');
     try {
-      const result = await imagesFromFileList(files);
+      const result = await imagesFromFileList(files, {
+        /*
+         * The browser path has no native scan to downscale for it, so it uses
+         * createImageBitmap and a canvas. Both are read through the session's
+         * injected document rather than the global, so this stays testable in
+         * plain node and does not freeze "no canvas" for a consumer that
+         * installs one later.
+         */
+        thumbnail: makeThumbnail(
+          globalThis.createImageBitmap?.bind(globalThis),
+          theDoc(),
+        ),
+      });
       setImageCollection(
         result.images,
         files[0].webkitRelativePath?.split('/')[0] || 'Selected directory',
@@ -278,6 +351,12 @@ export function createImageSession({
     return 'Browse images grouped by folder';
   });
 
+  /* --- sidebar -------------------------------------------------------------- */
+
+  function toggleImageSidebar() {
+    imageSidebarOpen.value = !imageSidebarOpen.value;
+  }
+
   return {
     imageDirectoryInput,
     imageDirectoryName,
@@ -286,11 +365,14 @@ export function createImageSession({
     imageGroups,
     imageFiles,
     selectedImageGroup,
+    imageSidebarOpen,
     imageStatus,
     imageStatusError,
     imageLoading,
     lightboxImage,
     lightboxIndex,
+    lightboxFullSizeUrl,
+    lightboxFullSizeLoading,
     visibleImages,
     activeLightboxImage,
     imagesBadge,
@@ -305,6 +387,7 @@ export function createImageSession({
     loadBrowserImageDirectory,
     openImageDirectory,
     openImageDirectoryAt,
+    toggleImageSidebar,
   };
 }
 
@@ -322,11 +405,14 @@ export const imageRecentPaths = session.imageRecentPaths;
 export const imageGroups = session.imageGroups;
 export const imageFiles = session.imageFiles;
 export const selectedImageGroup = session.selectedImageGroup;
+export const imageSidebarOpen = session.imageSidebarOpen;
 export const imageStatus = session.imageStatus;
 export const imageStatusError = session.imageStatusError;
 export const imageLoading = session.imageLoading;
 export const lightboxImage = session.lightboxImage;
 export const lightboxIndex = session.lightboxIndex;
+export const lightboxFullSizeUrl = session.lightboxFullSizeUrl;
+export const lightboxFullSizeLoading = session.lightboxFullSizeLoading;
 export const visibleImages = session.visibleImages;
 export const activeLightboxImage = session.activeLightboxImage;
 export const imagesBadge = session.imagesBadge;
@@ -341,3 +427,4 @@ export const handleLightboxKeydown = session.handleLightboxKeydown;
 export const loadBrowserImageDirectory = session.loadBrowserImageDirectory;
 export const openImageDirectory = session.openImageDirectory;
 export const openImageDirectoryAt = session.openImageDirectoryAt;
+export const toggleImageSidebar = session.toggleImageSidebar;

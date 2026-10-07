@@ -16,7 +16,23 @@ export const WORKSPACE_KEY = 'native-workspace.workspace.v1';
 export const LEGACY_TOC_KEY = 'native-workspace.toc-items.v1';
 export const WORKSPACE_VERSION = 1;
 
-const VIEWS = ['menu', 'editor', 'toc', 'pdf', 'images', 'map'];
+/*
+ * The views the workspace can restore, in menu order.
+ *
+ * Exported so tests/menu-cards.test.js can check the launcher's cards against
+ * this list. The two drifted apart - the menu rendered a card for a view this
+ * list did not have, and for a while the reverse - and nothing compared them until
+ * a test did, which is the only reason that is worth saying here.
+ */
+export const VIEWS = [
+  'menu',
+  'editor',
+  'toc',
+  'pdf',
+  'images',
+  'map',
+  'googlemap',
+];
 const MIN_ZOOM = 0.6;
 const MAX_ZOOM = 2.5;
 /*
@@ -248,6 +264,18 @@ function normalizeMapSession(raw) {
   };
 }
 
+export const GOOGLE_MAP_LAYERS = ['m', 's', 'y', 't'];
+
+export function normalizeGoogleMapSession(raw) {
+  const gm = raw && typeof raw === 'object' ? raw : {};
+  return {
+    layer: GOOGLE_MAP_LAYERS.includes(gm.layer) ? gm.layer : 'm',
+    renderer: gm.renderer === 'canvas' ? 'canvas' : 'dom',
+    showGrid: Boolean(gm.showGrid),
+    showCursor: gm.showCursor !== false,
+  };
+}
+
 export function normalizeWorkspace(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const editor =
@@ -265,6 +293,7 @@ export function normalizeWorkspace(raw) {
     pdf: normalizePdfSession(source.pdf),
     images: normalizeImageSession(source.images),
     map: normalizeMapSession(source.map),
+    googleMap: normalizeGoogleMapSession(source.googleMap),
   };
 }
 

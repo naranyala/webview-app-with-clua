@@ -64,6 +64,15 @@ export function createPdfSession({
   const pdfPageCount = ref(0);
   const pdfZoom = ref(boot.pdf.zoom);
   const activePage = ref(null);
+  /*
+   * Whether the contents sidebar is showing. Above the narrow breakpoint the
+   * sidebar is a real grid column and this is only ever true; below it, the
+   * sidebar overlays the page canvas so a phone gets the full width instead of
+   * a 165px column next to a 195px canvas. The panel is never unmounted either
+   * way, so it keeps its scroll position -- the same reasoning as the map's
+   * `sidebar-closed`, which narrows the column instead of removing the pane.
+   */
+  const pdfSidebarOpen = ref(true);
 
   /* page number -> <canvas> element rendered for it. */
   const pdfPageCanvases = new Map();
@@ -433,6 +442,16 @@ export function createPdfSession({
     return 'Open a PDF from your local system';
   });
 
+  /* --- sidebar -------------------------------------------------------------- */
+
+  function togglePdfSidebar() {
+    pdfSidebarOpen.value = !pdfSidebarOpen.value;
+  }
+
+  function setPdfSidebarOpen(open) {
+    pdfSidebarOpen.value = Boolean(open);
+  }
+
   return {
     activePage,
     changePdfPage,
@@ -458,6 +477,7 @@ export function createPdfSession({
     pdfRecentPaths,
     pdfRenderError,
     pdfSessionSize,
+    pdfSidebarOpen,
     pdfSourceUrl,
     pdfStatus,
     pdfStatusError,
@@ -475,6 +495,8 @@ export function createPdfSession({
     tocHeadings,
     tocMessage,
     tocState,
+    togglePdfSidebar,
+    setPdfSidebarOpen,
   };
 }
 
@@ -507,10 +529,12 @@ export const pdfPath = session.pdfPath;
 export const pdfRecentPaths = session.pdfRecentPaths;
 export const pdfRenderError = session.pdfRenderError;
 export const pdfSessionSize = session.pdfSessionSize;
+export const pdfSidebarOpen = session.pdfSidebarOpen;
 export const pdfSourceUrl = session.pdfSourceUrl;
 export const pdfStatus = session.pdfStatus;
 export const pdfStatusError = session.pdfStatusError;
 export const pdfZoom = session.pdfZoom;
+export const togglePdfSidebar = session.togglePdfSidebar;
 export const renderAllPdfPages = session.renderAllPdfPages;
 export const rememberPdfPath = session.rememberPdfPath;
 export const forgetPdfPath = session.forgetPdfPath;

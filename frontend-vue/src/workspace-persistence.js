@@ -18,6 +18,7 @@
  */
 
 import { computed, ref } from 'vue';
+import { GOOGLE_MAP_LAYERS } from './workspace.js';
 import { formatWorkspaceReport } from './workspace-report.js';
 
 const SAVE_DEBOUNCE_MS = 250;
@@ -98,6 +99,26 @@ export function createWorkspacePersistence({
         showGrid: sessions.mapShowGrid?.value ?? false,
         showCursor: sessions.mapShowCursor?.value ?? true,
       },
+      /*
+       * The Google viewer, as its own block rather than more fields on `map`. It
+       * is a separate session with a separate set of view options, and folding
+       * them together would mean a workspace could hold an Explorer filter and a
+       * Google renderer under one name with nothing to say which is which.
+       *
+       * Guarded field by field because a workspace written before this block
+       * existed has no `googleMap` at all, and the Explorer must keep restoring
+       * for those.
+       */
+      ...(sessions.googleMapLayer
+        ? {
+            googleMap: {
+              layer: sessions.googleMapLayer.value,
+              renderer: sessions.googleMapRenderer?.value ?? 'dom',
+              showGrid: Boolean(sessions.googleMapShowGrid?.value),
+              showCursor: sessions.googleMapShowCursor?.value !== false,
+            },
+          }
+        : {}),
     };
   }
 
@@ -153,6 +174,34 @@ export function createWorkspacePersistence({
       sessions.mapShowGrid.value = Boolean(incoming.map?.showGrid);
     if (sessions.mapShowCursor)
       sessions.mapShowCursor.value = incoming.map?.showCursor !== false;
+
+    /*
+     * The Google viewer's options, same contract as the Explorer's above: every
+     * field optional, because `googleMap` is absent from any workspace written
+     * before this block existed and the viewer must start from its own defaults
+     * rather than refuse to restore.
+     *
+     * The layer is validated against the closed list rather than passed through.
+     * An unrecognized name would produce a tile URL the session has no styling or
+     * badge for, which is the same failure mode the Explorer filter list closes
+     * against.
+     */
+    if (sessions.googleMapLayer) {
+      const stored = incoming.googleMap?.layer;
+      sessions.googleMapLayer.value = GOOGLE_MAP_LAYERS.includes(stored)
+        ? stored
+        : 'm';
+      if (sessions.googleMapRenderer)
+        sessions.googleMapRenderer.value =
+          incoming.googleMap?.renderer === 'canvas' ? 'canvas' : 'dom';
+      if (sessions.googleMapShowGrid)
+        sessions.googleMapShowGrid.value = Boolean(
+          incoming.googleMap?.showGrid,
+        );
+      if (sessions.googleMapShowCursor)
+        sessions.googleMapShowCursor.value =
+          incoming.googleMap?.showCursor !== false;
+    }
     return true;
   }
 
@@ -235,3 +284,40 @@ export function createWorkspacePersistence({
 }
 
 export { SAVE_DEBOUNCE_MS, SAVE_FAILURE_MESSAGE };
+
+/*
+ * The human phrase for a persistence mode.
+ *
+ * A pure function of the mode rather than a computed inside the engine, because
+ * both the shell (for a tool's badge) and the editor's status bar want the same
+ * sentence, and the engine is a per-instance object neither of them should have to
+ * reach into. Three inputs, three answers, and it can be tested without an engine.
+ */
+export function saveLabelFor(mode) {
+  if (mode === 'native') return 'saved to disk';
+  if (mode === 'local') return 'auto-saved';
+  return 'not saved';
+}
+
+/*
+ * The app's single persistence engine, for callers outside App.vue.
+ *
+ * A pane that changes workspace state - the folder the combined PDF goes to, say -
+ * needs to ask for a save, and that save is owned by the engine instance App.vue
+ * builds. Threading the engine through as a prop would make every pane depend on
+ * the shell's construction; this delegate is the same singleton pattern every
+ * other session module already uses, and it is registered once at boot.
+ *
+ * A no-op before registration rather than a throw: `persistNow` in toc-outline.js
+ * already behaves this way, and a pane mounted before the engine exists has
+ * nothing to save anyway.
+ */
+let engine = null;
+
+export function registerWorkspacePersistence(instance) {
+  engine = instance;
+}
+
+export function scheduleWorkspaceSave() {
+  engine?.schedule();
+}

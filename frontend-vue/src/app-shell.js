@@ -20,7 +20,7 @@ export function createAppShell({
   editorRef = editorInput,
   afterNextTick = nextTick,
 } = {}) {
-  /* Active tool: 'menu' | 'editor' | 'pdf' | 'images' | 'toc'. */
+  /* Active tool: 'menu' | 'editor' | 'pdf' | 'images' | 'toc' | 'map' | 'googlemap'. */
   const view = ref(boot.view);
 
   /*

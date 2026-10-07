@@ -1,13 +1,15 @@
 /*
- * The OpenStreetMap Explorer session: the live view state and everything that
- * drives it.
+ * The OpenStreetMap Explorer session.
  *
- * This is only the stateful half. The geometry it composes lives in
- * map-projection.js (the Web Mercator projection, the tile grid, the layer
- * transform), the coordinate primitives in geo.js, the gesture vocabulary in
- * map-input.js, and the canvas renderer in map-canvas.js. Keeping those apart is
- * what makes them testable without a session, and keeps this file about the one
- * thing it is for: what the map is doing right now.
+ * This is the *Explorer*, not a map. The things that make it the Explorer rather
+ * than a tiled map are here: a droppable pin, a persisted collection of named
+ * places, the colour filters, flights between places, and loaded GeoJSON layers.
+ *
+ * The map itself - the view state, pan/zoom, inertia, the gesture handlers, tile
+ * loading, the rate floor, and measurement - lives in map-viewport.js, shared with
+ * the Google viewer. That split is not tidiness for its own sake: the two had
+ * drifted, most visibly in the rate floor, which existed in one and was documented
+ * as applying to both. See map-viewport.js for what a session is expected to add.
  *
  * --- How the layer is drawn -------------------------------------------------
  *
@@ -22,66 +24,43 @@
  *
  * Zoom is a float (`mapZoom`), but tile servers serve whole zoom levels. So the
  * drawn tile set is committed at an integer `tileZoom`, and the layer is scaled
- * by 2^(tileZoom - mapZoom) while the gesture runs. Pinching therefore scales
- * the tiles that are already on screen instead of blanking the map and fetching
- * a new set dozens of times, and the new set is only committed - at a scale of 1
- * - when the gesture settles or drifts far enough that the blur would show.
- *
- * Tiles are requested one ring beyond the viewport in every direction, so
- * panning almost never exposes a tile that was never fetched.
+ * by 2^(tileZoom - mapZoom) while the gesture runs. Pinching therefore scales the
+ * tiles that are already on screen instead of blanking the map and fetching a new
+ * set dozens of times, and the new set is only committed - at a scale of 1 - when
+ * the gesture settles or drifts far enough that the blur would show.
  *
  * Tile images come from openstreetmap.org. The published tile usage policy asks
- * for a real identifying User-Agent and forbids bulk downloading; a desktop
- * viewer showing one map at a time is well inside those limits, but a build
+ * for a real identifying User-Agent and forbids bulk downloading; a desktop viewer
+ * showing one map at a time is well inside those limits, but a build
  * redistributed to many machines should point `tileUrl` at its own tile server.
  */
 import { computed, ref } from 'vue';
 
 import { restoredWorkspace } from './boot-state.js';
 import {
-  clampLatitude,
+  bearingDegrees,
+  compassPoint,
+  distanceMeters,
   formatCoordinates,
+  formatDistance,
+  formatDistanceImperial,
   normalizeLocation,
-  wrapLongitude,
 } from './geo.js';
-import { createCanvasRenderer } from './map-canvas.js';
+import { geojsonShapes } from './map-geojson-view.js';
+import { places as appPlaces } from './map-places.js';
 import {
-  CLICK_SLOP_PX,
-  classifyWheel,
-  INERTIA_DECAY,
-  INERTIA_MIN_SPEED,
-  KEY_LONG_STEP_FACTOR,
-  KEY_PAN_STEP_PX,
-} from './map-input.js';
-import {
-  clampZoom,
-  committedZoom,
   easeInOutCubic,
   interpolateView,
-  layerTransform,
   MAX_ZOOM,
-  minimumZoomFor,
   projectToPixel,
-  scaleBarFor,
   TILE_BUFFER,
   TILE_SIZE,
-  unprojectFromPixel,
-  visibleTiles,
 } from './map-projection.js';
-
-/*
- * A pinch may drift this far from the committed integer zoom before the tile set
- * is re-committed. Smaller values keep the tiles sharper but fetch more often;
- * 0.5 caps the transient blur at about 1.4x, which reads as smooth rather than
- * soft.
- */
-export const ZOOM_COMMIT_THRESHOLD = 0.5;
-
-/* How long after the last zoom event before a pinch is committed. */
-export const ZOOM_COMMIT_DELAY_MS = 160;
-
-const DEFAULT_TILE_URL = (z, x, y) =>
-  `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+import {
+  createMapViewport,
+  DEFAULT_RATE_FLOOR_MS,
+  ZOOM_COMMIT_THRESHOLD,
+} from './map-viewport.js';
 
 /*
  * The colour filters, which are a contract rather than a preference: each name
@@ -98,11 +77,21 @@ export const MAP_FILTERS = [
   'faded',
 ];
 
+/*
+ * The slippy-map tile URL. Every segment is interpolated: `${x}` and `${y}` are
+ * substitutions, and dropping the `$` from either would quietly request a literal
+ * `{x}` tile that 404s for every zoom level - which is the kind of thing that looks
+ * like "the map is just blank" rather than like a typo. The linter flags the unused
+ * parameters if that happens again.
+ */
+const DEFAULT_TILE_URL = (z, x, y) =>
+  `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+
 /* --- session -------------------------------------------------------------- */
 
 /*
- * The map session. External dependencies are injected so the reactive state and
- * the pan/zoom math are testable in plain node while the tile URL, tile size,
+ * The Explorer session. External dependencies are injected so the reactive state
+ * and the travel math are testable in plain node while the tile URL, tile size,
  * and the scheduler stay overridable.
  */
 export function createMapExplorer({
@@ -117,58 +106,36 @@ export function createMapExplorer({
   cancelFrame = (handle) =>
     globalThis.cancelAnimationFrame?.(handle) ??
     globalThis.clearTimeout(handle),
-  /* Injectable so the canvas renderer is testable outside a browser, which has
-     no Image constructor. */
+  /* Injectable so the canvas renderer is testable outside a browser, which has no
+     Image constructor. */
   createImage = () => new globalThis.Image(),
   now = () => Date.now(),
   buffer = TILE_BUFFER,
+  rateFloorMs = DEFAULT_RATE_FLOOR_MS,
+  /*
+   * The saved places, injected rather than imported at the top of the file.
+   * map-places.js is a session of its own and importing it here would make the map
+   * own a second copy of the collection - the same reason the schema takes
+   * normalizeLocation from geo.js rather than from the map. Injected rather than
+   * used directly so a test that builds a session still gets one with no places,
+   * instead of a shared collection that leaks between them.
+   */
+  mapPlaces = null,
 } = {}) {
   const theDoc = () => doc ?? globalThis.document;
 
-  const mapElement = ref(null);
-  const mapCanvasContext = ref(null);
-  /*
-   * Backing-store ratio for the canvas renderer. Tiles are 256 CSS pixels and the
-   * public OSM server has no retina variant, so rendering above 1x only makes
-   * them larger, not sharper; 1 is the honest choice and keeps the buffer small.
-   */
-  const pixelRatio = () => 1;
-  const mapCenter = ref({
-    lat: clampLatitude(initialCenter.lat),
-    lon: wrapLongitude(initialCenter.lon),
-  });
-  /* The zoom the view is heading for. Fractional during a gesture. */
-  const mapZoom = ref(clampZoom(initialZoom));
-  /* The whole zoom level the currently drawn tile set belongs to. */
-  const tileZoom = ref(committedZoom(initialZoom));
-  const mapSize = ref({ width: 0, height: 0 });
+  /* --- what makes this the Explorer and not a map -------------------------- */
+
   const mapPin = ref(null);
   const mapStatus = ref('Click the map to drop a pin for a section.');
   const mapStatusError = ref(false);
-  const mapPanning = ref(false);
-  /* True while the view is travelling to a saved place. */
-  const mapFlying = ref(false);
-  /* View options, persisted by the workspace so the map looks the same next
+  /* View options persisted by the workspace, so the map looks the same next
      launch. Each is a small enum rather than a free string so a corrupt stored
      value cannot invent a filter class that does not exist. */
   const mapFilter = ref(boot.map.filter || 'none');
-  const mapRenderer = ref(boot.map.renderer === 'canvas' ? 'canvas' : 'dom');
-  const mapShowGrid = ref(Boolean(boot.map.showGrid));
-  const mapShowCursor = ref(boot.map.showCursor !== false);
   const mapSidebarOpen = ref(boot.map.sidebarOpen !== false);
-  /* Where the pointer is, as a coordinate, for the readout under the cursor. */
-  const mapCursorLocation = ref(null);
 
-  let dragStart = null;
-  let observer = null;
   let flight = null;
-  let commitTimer = 0;
-  let glideHandle = 0;
-  /* Keys of tiles in the current set that have reported in. Reset whenever the
-     set changes, so a late load from the previous set cannot make a fresh one
-     look ready. */
-  const loadedKeys = new Set();
-  const loadedCount = ref(0);
 
   function setMapStatus(message, isError = false) {
     mapStatus.value = message;
@@ -176,530 +143,37 @@ export function createMapExplorer({
   }
 
   /*
-   * The canvas renderer, wired to this session's state through accessors: it
-   * needs the tiles, the transform, the size and the mode, all of which change
-   * while a gesture runs. See map-canvas.js for why it is not inline.
-   */
-  const canvasRenderer = createCanvasRenderer({
-    getTiles: () => mapTiles.value,
-    getTransform: () => mapTransform.value,
-    getSize: () => mapSize.value,
-    isEnabled: () => mapRenderer.value === 'canvas',
-    tileSource,
-    getContext: () => mapCanvasContext.value,
-    createImage,
-    animate,
-    cancelFrame,
-    pixelRatio,
-    tileSize,
-  });
-
-  /* --- derived view -------------------------------------------------------- */
-
-  /* The one transform that places every tile. */
-  const mapTransform = computed(() =>
-    layerTransform({
-      centerLat: mapCenter.value.lat,
-      centerLon: mapCenter.value.lon,
-      zoom: mapZoom.value,
-      tileZoom: tileZoom.value,
-      width: mapSize.value.width,
-      height: mapSize.value.height,
-    }),
-  );
-
-  /* Any change to the view, the tile set, or the size needs a repaint. */
-  const canvasInputs = computed(() => [
-    mapTransform.value.css,
-    mapSize.value.width,
-    mapSize.value.height,
-    mapTiles.value.length,
-    mapZoom.value,
-  ]);
-
-  /* The tiles covering the viewport at the committed zoom, plus a ring. */
-  const mapTiles = computed(() =>
-    visibleTiles({
-      centerLat: mapCenter.value.lat,
-      centerLon: mapCenter.value.lon,
-      zoom: tileZoom.value,
-      width: mapSize.value.width,
-      height: mapSize.value.height,
-      tileSize,
-      buffer,
-      scale: mapTransform.value.scale,
-    }),
-  );
-
-  /*
-   * The outgoing tile set, kept mounted while the incoming one fetches so a zoom
-   * commit or a flight fades over ground that is already there instead of
-   * flashing the background.
+   * Drops the pin at a geographic position, without moving the map.
    *
-   * It stores the tile zoom it was fetched at, and its transform is derived
-   * live from the current view. A captured transform would freeze the outgoing
-   * tiles at the position they had when the commit happened, so they would sit
-   * visibly misaligned for as long as they were on screen - and during a flight,
-   * which animates the view, that would be the whole journey.
+   * Takes a coordinate rather than a pointer event, because that is what both
+   * callers have: the viewport's click hook has already converted the event, and
+   * toc-outline.js has a stored location. pickMapLocation() below wraps it for a
+   * raw event.
    */
-  const previousLayer = ref(null);
-
-  /*
-   * The outgoing layer's transform, recomputed every frame from the live view.
-   * Same formula as the main layer, so the two layers line up exactly and the
-   * incoming tiles appear to develop out of the outgoing ones.
-   */
-  const previousTransform = computed(() => {
-    const layer = previousLayer.value;
-    if (!layer) return null;
-    return layerTransform({
-      centerLat: mapCenter.value.lat,
-      centerLon: mapCenter.value.lon,
-      zoom: mapZoom.value,
-      tileZoom: layer.tileZoom,
-      width: mapSize.value.width,
-      height: mapSize.value.height,
-    });
-  });
-
-  /*
-   * The pin's offset inside the viewport. Derived from the two projections
-   * rather than from a drag handler, so the pin stays put while the map pans
-   * under it and moves with the map when the centre changes.
-   */
-  const mapPinOffset = computed(() => {
-    const point = mapPin.value;
-    if (!point) return null;
-    const center = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      mapZoom.value,
-    );
-    const pinPixel = projectToPixel(point.lon, point.lat, mapZoom.value);
-    return {
-      left: pinPixel.x - center.x + mapSize.value.width / 2,
-      top: pinPixel.y - center.y + mapSize.value.height / 2,
-    };
-  });
-
-  /*
-   * Where a saved place sits in the viewport, in the same terms as the pin. The
-   * projection is taken at the *view* zoom, so a marker stays correct while a
-   * pinch is partway between two levels.
-   */
-  function placeMarkerOffset(place) {
-    if (!place || !(mapSize.value.width > 0) || !(mapSize.value.height > 0)) {
-      return null;
-    }
-    const center = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      mapZoom.value,
-    );
-    const point = projectToPixel(place.lon, place.lat, mapZoom.value);
-    return {
-      left: point.x - center.x + mapSize.value.width / 2,
-      top: point.y - center.y + mapSize.value.height / 2,
-    };
-  }
-
-  /* The round distance bar for the current scale. */
-  const mapScaleBar = computed(() =>
-    scaleBarFor(mapCenter.value.lat, mapZoom.value, 120),
-  );
-
-  /*
-   * The lowest zoom this viewport can show, so the world always fills it. It
-   * rises as the window grows, which is what keeps a wide pane from zooming out
-   * past the edge of the world and showing empty background.
-   */
-  const minViewZoom = computed(() =>
-    minimumZoomFor(mapSize.value.width, mapSize.value.height, tileSize),
-  );
-
-  /* The zoom readout: a decimal only while the view is between two levels. */
-  const mapZoomLabel = computed(() => {
-    const zoom = mapZoom.value;
-    return Math.abs(zoom - Math.round(zoom)) < 0.05
-      ? `z${Math.round(zoom)}`
-      : `z${zoom.toFixed(1)}`;
-  });
-
-  function tileSource(tile) {
-    return tileUrl(tile.z, tile.x, tile.y, tileSize);
-  }
-
-  /* --- tile loading ------------------------------------------------------- */
-
-  /*
-   * Derived, not stored: a loading flag that has to be poked by hand goes stale
-   * the moment the tile set changes for any other reason. Comparing a live count
-   * against a live total cannot.
-   */
-  const mapLoading = computed(() => {
-    const total = mapTiles.value.length;
-    return total > 0 && loadedCount.value < total;
-  });
-
-  /*
-   * A tile reported in. The first load after a commit also retires the previous
-   * set, which is what makes the cross-fade last a single tile fetch rather than
-   * the whole generation.
-   */
-  function noteTileLoaded(key) {
-    if (loadedKeys.has(key)) return;
-    loadedKeys.add(key);
-    loadedCount.value += 1;
-    /*
-     * Retire the outgoing layer only once the incoming set is complete.
-     *
-     * Retiring it on the first load - which is what this used to do - drops the
-     * ground the map is standing on while most of the new tiles are still
-     * missing, so a flight arrived at a half-drawn map.
-     */
-    if (previousLayer.value && !mapLoading.value) previousLayer.value = null;
-  }
-
-  /* Forgets which tiles have reported in, for when the whole set is replaced. */
-  function resetLoadedTiles() {
-    loadedKeys.clear();
-    loadedCount.value = 0;
-  }
-
-  /* --- zoom commit -------------------------------------------------------- */
-
-  /*
-   * Re-commits the drawn tile set to the nearest whole zoom and clears the
-   * pending-commit timer. This is the only moment the tile URLs change, which
-   * is what keeps a pinch from re-fetching a full tile set per frame.
-   */
-  function commitTileZoom() {
-    if (commitTimer) {
-      globalThis.clearTimeout(commitTimer);
-      commitTimer = 0;
-    }
-    const target = committedZoom(mapZoom.value);
-    if (target !== tileZoom.value) {
-      previousLayer.value = { tiles: mapTiles.value, tileZoom: tileZoom.value };
-      tileZoom.value = target;
-      resetLoadedTiles();
-    }
-  }
-
-  function scheduleCommit() {
-    if (commitTimer) globalThis.clearTimeout(commitTimer);
-    commitTimer = globalThis.setTimeout(() => {
-      commitTimer = 0;
-      commitTileZoom();
-    }, ZOOM_COMMIT_DELAY_MS);
-  }
-
-  /* --- panning and zooming ------------------------------------------------ */
-
-  /*
-   * Keeps the view inside the world.
-   *
-   * Longitude needs nothing: it wraps, so the map repeats forever. Latitude does
-   * not - the world ends at the pole cut-off - so at high zoom a viewport centred
-   * near the pole extends past the top or bottom of the world, where no rows
-   * exist and the pane would show bare background. The centre is therefore pulled
-   * back inside, or centred outright when the world is shorter than the viewport.
-   */
-  function clampCenterToWorld() {
-    if (!(mapSize.value.width > 0) || !(mapSize.value.height > 0)) return;
-    const world = TILE_SIZE * 2 ** mapZoom.value;
-    const halfHeight = mapSize.value.height / 2;
-    const center = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      mapZoom.value,
-    );
-    const y =
-      world <= mapSize.value.height
-        ? world / 2
-        : Math.min(world - halfHeight, Math.max(halfHeight, center.y));
-    if (y !== center.y) {
-      mapCenter.value = unprojectFromPixel(center.x, y, mapZoom.value);
-    }
-  }
-
-  /*
-   * Moves the centre by a *display* pixel delta. The delta is unprojected rather
-   * than divided by a tile size, so panning tracks the cursor at every zoom
-   * level instead of only at the one where a tile equals its pixel count.
-   */
-  function panMapByPixels(dx, dy) {
-    const current = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      mapZoom.value,
-    );
-    mapCenter.value = unprojectFromPixel(
-      current.x - dx,
-      current.y - dy,
-      mapZoom.value,
-    );
-    clampCenterToWorld();
-  }
-
-  /*
-   * Zooms by a signed delta while keeping the geographic position under
-   * (anchorX, anchorY) - the cursor, or the viewport centre for the buttons -
-   * pinned in place.
-   *
-   * The anchor is unprojected at the old zoom, reprojected at the new one, and
-   * then the centre is solved backwards from where that point must land. The
-   * solve has to add half the viewport back, because a centre is measured from
-   * the world's middle while the anchor is measured from the viewport's
-   * top-left. With an unmeasured viewport the anchor collapses to the centre, so
-   * the fallback is "zoom about the middle" rather than a jump to 0,0.
-   */
-  function zoomMap(delta, anchorX = null, anchorY = null) {
-    const previous = mapZoom.value;
-    const nextZoom = Math.min(
-      MAX_ZOOM,
-      Math.max(minViewZoom.value, clampZoom(previous + delta)),
-    );
-    if (nextZoom === previous) return;
-    const targetX = anchorX ?? mapSize.value.width / 2;
-    const targetY = anchorY ?? mapSize.value.height / 2;
-
-    const center = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      previous,
-    );
-    const anchorHere = unprojectFromPixel(
-      center.x - mapSize.value.width / 2 + targetX,
-      center.y - mapSize.value.height / 2 + targetY,
-      previous,
-    );
-    const anchorThere = projectToPixel(
-      anchorHere.lon,
-      anchorHere.lat,
-      nextZoom,
-    );
-
-    mapZoom.value = nextZoom;
-    mapCenter.value = unprojectFromPixel(
-      anchorThere.x - targetX + mapSize.value.width / 2,
-      anchorThere.y - targetY + mapSize.value.height / 2,
-      nextZoom,
-    );
-
-    clampCenterToWorld();
-
-    /* Commit immediately for a deliberate one-step change (a button or a mouse
-       notch); let a continuous gesture run and commit when it settles. */
-    if (Math.abs(delta) >= 1) commitTileZoom();
-    else {
-      if (Math.abs(mapZoom.value - tileZoom.value) >= ZOOM_COMMIT_THRESHOLD) {
-        commitTileZoom();
-      } else {
-        scheduleCommit();
-      }
-    }
-  }
-
-  function zoomIn() {
-    zoomMap(1);
-  }
-
-  function zoomOut() {
-    zoomMap(-1);
-  }
-
-  /* --- inertia ------------------------------------------------------------ */
-
-  function stopGlide() {
-    if (glideHandle) {
-      cancelFrame(glideHandle);
-      glideHandle = 0;
-    }
-  }
-
-  /*
-   * Coasts the map after a flick, shedding speed every frame. The decay is a
-   * per-millisecond factor rather than a fixed amount per frame, so the glide
-   * lasts the same wall-clock time whatever the frame rate: without that, a slow
-   * machine coasts further than a fast one.
-   */
-  function startGlide(velocityX, velocityY) {
-    stopGlide();
-    if (
-      Math.abs(velocityX) < INERTIA_MIN_SPEED &&
-      Math.abs(velocityY) < INERTIA_MIN_SPEED
-    ) {
-      return;
-    }
-    let last = now();
-    const step = () => {
-      const stamp = now();
-      const elapsed = Math.min(64, Math.max(1, stamp - last));
-      last = stamp;
-      const decay = INERTIA_DECAY ** elapsed;
-      velocityX *= decay;
-      velocityY *= decay;
-      const current = projectToPixel(
-        mapCenter.value.lon,
-        mapCenter.value.lat,
-        mapZoom.value,
-      );
-      mapCenter.value = unprojectFromPixel(
-        current.x - velocityX * elapsed,
-        current.y - velocityY * elapsed,
-        mapZoom.value,
-      );
-      clampCenterToWorld();
-      if (
-        Math.abs(velocityX) < INERTIA_MIN_SPEED &&
-        Math.abs(velocityY) < INERTIA_MIN_SPEED
-      ) {
-        glideHandle = 0;
-        return;
-      }
-      glideHandle = animate(step);
-    };
-    glideHandle = animate(step);
-  }
-
-  /* --- pointer interaction ------------------------------------------------ */
-
-  /*
-   * The viewport's top-left in projected pixels, which every screen-to-world
-   * conversion is relative to.
-   */
-  function mapOrigin() {
-    const center = projectToPixel(
-      mapCenter.value.lon,
-      mapCenter.value.lat,
-      mapZoom.value,
-    );
-    return {
-      x: center.x - mapSize.value.width / 2,
-      y: center.y - mapSize.value.height / 2,
-    };
-  }
-
-  /*
-   * Converts a pointer event to a geographic position. Returns null when the
-   * viewport has no measured size or the element has no box, which is the one
-   * case where a click cannot be turned into a coordinate.
-   */
-  function locationFromEvent(event) {
-    const element = mapElement.value;
-    if (!element || !(mapSize.value.width > 0) || !(mapSize.value.height > 0))
-      return null;
-    const bounds = element.getBoundingClientRect?.();
-    if (!bounds) return null;
-    const origin = mapOrigin();
-    return unprojectFromPixel(
-      origin.x + (event.clientX - bounds.left),
-      origin.y + (event.clientY - bounds.top),
-      mapZoom.value,
-    );
-  }
-
-  /* Drops the pin where the user clicked, without moving the map. */
-  function pickMapLocation(event) {
-    const point = locationFromEvent(event);
-    if (!point) return false;
-    const location = normalizeLocation(point);
-    if (!location) {
+  function pinLocation(location) {
+    const point = normalizeLocation(location);
+    if (!point) {
       setMapStatus('That point is outside the map area.', true);
       return false;
     }
-    mapPin.value = location;
-    setMapStatus(`Pin dropped at ${formatCoordinates(location)}.`);
+    mapPin.value = point;
+    setMapStatus(`Pin dropped at ${formatCoordinates(point)}.`);
     return true;
   }
 
-  function handleMapPointerDown(event) {
-    if (event.button !== 0) return;
-    /* A grab is a request to stop moving the map for them. */
-    cancelFlight();
-    stopGlide();
-    dragStart = {
-      pointerId: event.pointerId,
-      /*
-       * startX/startY never move: they are what the click-versus-drag test is
-       * measured against. lastX/lastY is what the pan is measured against, and
-       * lastTime feeds the flick velocity. Conflating the first two made every
-       * drag look like a click that happened to end at the last move.
-       */
-      startX: event.clientX,
-      startY: event.clientY,
-      lastX: event.clientX,
-      lastY: event.clientY,
-      lastTime: now(),
-      velocityX: 0,
-      velocityY: 0,
-    };
-    mapPanning.value = false;
-    mapElement.value?.setPointerCapture?.(event.pointerId);
+  /* The event-taking form, kept because that is the public shape the app and the
+     tests have always used: it converts and delegates, so there is one place that
+     decides what a valid pin is. */
+  function pickMapLocation(event) {
+    return pinLocation(vp.locationFromEvent(event));
   }
 
-  function handleMapPointerMove(event) {
-    /* The readout follows the pointer whether or not a drag is in progress. */
-    if (mapShowCursor.value) {
-      const at = locationFromEvent(event);
-      mapCursorLocation.value = at
-        ? { lat: at.lat, lon: at.lon, label: '' }
-        : null;
-    }
-    if (!dragStart || dragStart.pointerId !== event.pointerId) return;
-    const dx = event.clientX - dragStart.lastX;
-    const dy = event.clientY - dragStart.lastY;
-    const stamp = now();
-    const elapsed = Math.max(1, stamp - dragStart.lastTime);
-    /* A smoothed velocity: the last sample alone is too noisy to throw with. */
-    dragStart.velocityX = 0.7 * dragStart.velocityX + 0.3 * (dx / elapsed);
-    dragStart.velocityY = 0.7 * dragStart.velocityY + 0.3 * (dy / elapsed);
-    panMapByPixels(dx, dy);
-    if (
-      Math.hypot(
-        event.clientX - dragStart.startX,
-        event.clientY - dragStart.startY,
-      ) > CLICK_SLOP_PX
-    ) {
-      mapPanning.value = true;
-    }
-    dragStart.lastX = event.clientX;
-    dragStart.lastY = event.clientY;
-    dragStart.lastTime = stamp;
-  }
-
-  /*
-   * A drag that ends over a tiny movement is a click, not a pan, so only then
-   * does the pin move. Without the threshold, every pan would also leave a pin
-   * wherever the pointer happened to stop. A drag that did move is released with
-   * its velocity, so a flick coasts.
-   */
-  function handleMapPointerUp(event) {
-    if (!dragStart || dragStart.pointerId !== event.pointerId) return;
-    const moved = Math.hypot(
-      event.clientX - dragStart.startX,
-      event.clientY - dragStart.startY,
+  /* Announces where the centre is after a keyboard move. */
+  function reportViewCoordinates() {
+    setMapStatus(
+      `Centre ${formatCoordinates({ lat: vp.mapCenter.value.lat, lon: vp.mapCenter.value.lon })} · ${vp.mapZoomLabel.value}.`,
     );
-    const wasDrag = moved > CLICK_SLOP_PX;
-    const { velocityX, velocityY } = dragStart;
-    mapElement.value?.releasePointerCapture?.(event.pointerId);
-    dragStart = null;
-    mapPanning.value = false;
-    if (wasDrag) startGlide(velocityX, velocityY);
-    else pickMapLocation(event);
   }
-
-  function handleMapPointerCancel() {
-    dragStart = null;
-    mapPanning.value = false;
-  }
-
-  function handleMapPointerLeave() {
-    mapCursorLocation.value = null;
-  }
-
-  /* --- view options -------------------------------------------------------- */
 
   function setMapFilter(name) {
     /* An unknown name would produce a class with no rules and a map that looks
@@ -707,182 +181,97 @@ export function createMapExplorer({
     mapFilter.value = MAP_FILTERS.includes(name) ? name : 'none';
   }
 
-  function setMapRenderer(name) {
-    const next = name === 'canvas' ? 'canvas' : 'dom';
-    if (next === mapRenderer.value) return;
-    mapRenderer.value = next;
-    if (next === 'canvas') {
-      /* The canvas has no bitmap until it is measured and sized. */
-      measureMap();
-      canvasRenderer.schedule();
-    } else {
-      /* Nothing is queued from here on; whatever frame is pending draws into a
-         renderer that has been switched off and returns immediately. */
-      canvasRenderer.schedule();
-    }
-  }
-
   function toggleMapSidebar() {
     mapSidebarOpen.value = !mapSidebarOpen.value;
   }
 
-  function setMapShowGrid(value) {
-    mapShowGrid.value = Boolean(value);
-  }
-
-  function setMapShowCursor(value) {
-    mapShowCursor.value = Boolean(value);
-    if (!value) mapCursorLocation.value = null;
-  }
-
-  /* Double click zooms in about the click, the way a map is expected to. */
-  function handleMapDoubleClick(event) {
-    event.preventDefault?.();
-    cancelFlight();
-    const element = mapElement.value;
-    if (!element) return;
-    const bounds = element.getBoundingClientRect?.();
-    if (!bounds) return;
-    zoomMap(1, event.clientX - bounds.left, event.clientY - bounds.top);
-  }
-
   /*
-   * The wheel is split by intent: a pinch or a mouse notch zooms about the
-   * cursor, and a trackpad's two-finger scroll pans the map under it. Pinch
-   * deltas arrive as ctrl+wheel and are already fractional, so they are scaled
-   * down to a fraction of a zoom level each instead of stepping a whole level.
+   * The place the cursor readout measures against: whatever was last opened.
+   *
+   * Stored as an id rather than as the place object, so selecting does not pin a
+   * snapshot of a record the sidebar can still rename or remove. The computed
+   * re-resolves, which is what makes a deleted place fall out of the selection on
+   * its own instead of leaving the readout measuring to nowhere.
    */
-  function handleMapWheel(event) {
-    event.preventDefault?.();
-    const element = mapElement.value;
-    if (!element) return;
-    cancelFlight();
-
-    if (classifyWheel(event) === 'pan') {
-      stopGlide();
-      panMapByPixels(event.deltaX || 0, event.deltaY || 0);
-      return;
-    }
-    const bounds = element.getBoundingClientRect?.();
-    if (!bounds) return;
-    /* A pinch reports ctrlKey and small deltas; a notch reports a large one. */
-    const step = event.ctrlKey
-      ? clampFraction(-event.deltaY / 240)
-      : event.deltaY < 0
-        ? 1
-        : -1;
-    zoomMap(step, event.clientX - bounds.left, event.clientY - bounds.top);
-  }
-
-  /* Keeps a fractional step from becoming a wild jump on a spiky trackpad. */
-  function clampFraction(value) {
-    if (!Number.isFinite(value)) return 0;
-    return Math.min(0.4, Math.max(-0.4, value));
-  }
-
-  /* --- keyboard ----------------------------------------------------------- */
-
-  /*
-   * The canvas is focusable, so it must be drivable without a pointer. Arrows
-   * pan, shift makes a long step, and +/- zoom about the centre. The status line
-   * reports the coordinates so a keyboard user can still place a pin.
-   */
-  function handleMapKeydown(event) {
-    const step = KEY_PAN_STEP_PX * (event.shiftKey ? KEY_LONG_STEP_FACTOR : 1);
-
-    switch (event.key) {
-      case 'ArrowLeft':
-        panMapByPixels(step, 0);
-        break;
-      case 'ArrowRight':
-        panMapByPixels(-step, 0);
-        break;
-      case 'ArrowUp':
-        panMapByPixels(0, step);
-        break;
-      case 'ArrowDown':
-        panMapByPixels(0, -step);
-        break;
-      case '+':
-      case '=':
-        zoomMap(1);
-        break;
-      case '-':
-      case '_':
-        zoomMap(-1);
-        break;
-      default:
-        return;
-    }
-    event.preventDefault?.();
-    /* Only a key the map actually used counts as taking over, so an unhandled
-       key does not silently cancel a journey. */
-    cancelFlight();
-    reportViewCoordinates();
-  }
-
-  /* Announces where the centre is after a keyboard move. */
-  function reportViewCoordinates() {
-    setMapStatus(
-      `Centre ${formatCoordinates({ lat: mapCenter.value.lat, lon: mapCenter.value.lon })} · ${mapZoomLabel.value}.`,
+  const selectedPlaceId = ref(null);
+  const selectedPlace = computed(() => {
+    /* Optional chaining rather than a default: a session built without places must
+       measure nothing rather than throw on the first pointer move. */
+    const collection = mapPlaces ?? [];
+    return (
+      collection.find((place) => place.id === selectedPlaceId.value) ?? null
     );
+  });
+
+  function selectPlace(placeId) {
+    selectedPlaceId.value = placeId;
   }
 
-  /* --- viewport measurement ------------------------------------------------ */
+  function clearPlaceSelection() {
+    selectedPlaceId.value = null;
+  }
 
   /*
-   * The tile grid needs a pixel size, which only the laid-out element knows. A
-   * ResizeObserver reports it, and a window resize listener covers the hosts
-   * where the observer never fires.
+   * How far the pointer is from a chosen place, and which way.
+   *
+   * The scale bar answers "how big is a pixel here"; this answers "how far is the
+   * thing I am pointing at", which is the question a reader with a cursor over a
+   * marker is actually asking and which no amount of zooming answers directly.
+   *
+   * Derived from two existing refs rather than stored, so it cannot go stale: the
+   * readout follows the pointer because the pointer did.
    */
-  function measureMap() {
-    const element = mapElement.value;
-    if (!element) return;
-    const width = Math.floor(element.clientWidth || 0);
-    const height = Math.floor(element.clientHeight || 0);
-    if (width <= 0 || height <= 0) return;
-    const current = mapSize.value;
-    if (current.width === width && current.height === height) return;
-    mapSize.value = { width, height };
-    /* The canvas backing store has to match the CSS size, or the tiles are
-       stretched or cropped. */
-    const canvas = theDoc()?.querySelector?.('#map-canvas-surface');
-    if (canvas) {
-      canvas.width = Math.floor(width * pixelRatio());
-      canvas.height = Math.floor(height * pixelRatio());
-    }
-    resetLoadedTiles();
-    canvasRenderer.prune();
-    canvasRenderer.schedule();
+  const mapCursorBearing = computed(() => {
+    const from = vp.mapCursorLocation.value;
+    if (!from || !selectedPlace.value) return null;
+    const meters = distanceMeters(from, selectedPlace.value);
+    if (meters === null) return null;
+    const bearing = bearingDegrees(from, selectedPlace.value);
+    return {
+      meters,
+      bearing,
+      label: formatDistance(meters),
+      imperial: formatDistanceImperial(meters),
+      point: compassPoint(bearing),
+      /* Three digits is what a compass rose shows, and it is enough to tell one
+         bearing from another without implying survey precision. */
+      bearingLabel: `${Math.round(bearing).toString().padStart(3, '0')}°`,
+    };
+  });
+
+  /*
+   * The pin's offset inside the viewport. Derived from the two projections rather
+   * than from a drag handler, so the pin stays put while the map pans under it and
+   * moves with the map when the centre changes.
+   *
+   * The projection is at the *view* zoom, not the tile zoom, so a pin and a marker
+   * both stay correct while a pinch is partway between two levels.
+   */
+  function projectAtViewZoom(point) {
+    return projectToPixel(point.lon, point.lat, vp.mapZoom.value);
   }
 
-  function handleWindowResize() {
-    measureMap();
+  function offsetFor(point) {
+    if (!point) return null;
+    const { width, height } = vp.mapSize.value;
+    if (!(width > 0) || !(height > 0)) return null;
+    const center = projectToPixel(
+      vp.mapCenter.value.lon,
+      vp.mapCenter.value.lat,
+      vp.mapZoom.value,
+    );
+    const here = projectAtViewZoom(point);
+    return {
+      left: here.x - center.x + width / 2,
+      top: here.y - center.y + height / 2,
+    };
   }
 
-  function startMapObserver() {
-    const element = mapElement.value;
-    if (!element) return;
-    measureMap();
-    const ObserverClass =
-      theDoc()?.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
-    if (typeof ObserverClass === 'function') {
-      observer = new ObserverClass(() => measureMap());
-      observer.observe(element);
-    }
-    theDoc()?.defaultView?.addEventListener?.('resize', handleWindowResize);
-  }
+  const mapPinOffset = computed(() => offsetFor(mapPin.value));
 
-  function disposeMapExplorer() {
-    observer?.disconnect();
-    observer = null;
-    dragStart = null;
-    stopGlide();
-    cancelFlight();
-    canvasRenderer.dispose();
-    if (commitTimer) globalThis.clearTimeout(commitTimer);
-    commitTimer = 0;
-    theDoc()?.defaultView?.removeEventListener?.('resize', handleWindowResize);
+  /* Where a saved place sits in the viewport, in the same terms as the pin. */
+  function placeMarkerOffset(place) {
+    return offsetFor(place);
   }
 
   /* --- travel between places ------------------------------------------------ */
@@ -897,19 +286,23 @@ export function createMapExplorer({
 
   /*
    * Where a place should be looked at from: close enough to be useful, but never
-   * further out than the reader already was, and never below what the viewport
-   * can actually cover.
+   * further out than the reader already was, and never below what the viewport can
+   * actually cover.
    */
   function targetViewFor(location) {
     return {
       lat: location.lat,
       lon: location.lon,
       /*
-       * Zoom *in* to 13 when the reader is further out than that, and never
-       * further out than they already were. min() here would do the opposite and
-       * pull a reader who is already at street level back to a continent.
+       * Zoom *in* to 13 when the reader is further out than that, and never further
+       * out than they already were. min() here would do the opposite and pull a
+       * reader who is already at street level back to a continent.
        */
-      zoom: Math.max(mapZoom.value, Math.min(13, MAX_ZOOM), minViewZoom.value),
+      zoom: Math.max(
+        vp.mapZoom.value,
+        Math.min(13, MAX_ZOOM),
+        vp.minViewZoom.value,
+      ),
     };
   }
 
@@ -921,10 +314,10 @@ export function createMapExplorer({
    */
   function arriveAt(pin) {
     mapPin.value = pin;
-    commitTileZoom();
+    vp.commitTileZoom();
     setMapStatus(
       pin.label
-        ? `${pin.label} \u00b7 ${formatCoordinates(pin)}`
+        ? `${pin.label} · ${formatCoordinates(pin)}`
         : `Showing ${formatCoordinates(pin)}.`,
     );
   }
@@ -935,16 +328,16 @@ export function createMapExplorer({
     cancelFrame(flight.handle);
     const arrived = flight.pin;
     flight = null;
-    mapFlying.value = false;
+    vp.mapFlying.value = false;
     if (landed && arrived) arriveAt(arrived);
   }
 
   /*
    * Stops a journey where it is. The pin does not move: the reader took over, so
-   * their intent is the last word, and a cancelled flight leaves the map where
-   * they were rather than arriving somewhere they did not choose. The outgoing
-   * tile layer stays until the current set has loaded, so even an interrupted
-   * flight is standing on real ground.
+   * their intent is the last word, and a cancelled flight leaves the map where they
+   * were rather than arriving somewhere they did not choose. The outgoing tile layer
+   * stays until the current set has loaded, so even an interrupted flight is
+   * standing on real ground.
    */
   function cancelFlight() {
     if (!flight) return;
@@ -962,21 +355,23 @@ export function createMapExplorer({
       flight.to,
       easeInOutCubic(progress),
     );
-    mapZoom.value = view.zoom;
-    mapCenter.value = { lat: view.lat, lon: view.lon };
-    clampCenterToWorld();
+    vp.mapZoom.value = view.zoom;
+    vp.mapCenter.value = { lat: view.lat, lon: view.lon };
+    vp.clampCenterToWorld();
     /*
-     * The same threshold a pinch uses. Committing here rather than once at the
-     * end is what keeps the ground under the journey sharp: without it the
-     * source tiles would be magnified by the whole zoom difference, which for a
-     * jump from zoom 10 to 14 is sixteen times. The previous integer level stays
-     * underneath as the backdrop, so the map is never blank mid-flight.
+     * The same threshold a pinch uses. Committing here rather than once at the end
+     * is what keeps the ground under the journey sharp: without it the source tiles
+     * would be magnified by the whole zoom difference, which for a jump from zoom
+     * 10 to 14 is sixteen times. The previous integer level stays underneath as the
+     * backdrop, so the map is never blank mid-flight.
      */
-    if (Math.abs(mapZoom.value - tileZoom.value) >= ZOOM_COMMIT_THRESHOLD) {
-      commitTileZoom();
+    if (
+      Math.abs(vp.mapZoom.value - vp.tileZoom.value) >= ZOOM_COMMIT_THRESHOLD
+    ) {
+      vp.commitTileZoom();
     }
     if (progress >= 1) {
-      commitTileZoom();
+      vp.commitTileZoom();
       finishFlight(true);
       return;
     }
@@ -995,31 +390,29 @@ export function createMapExplorer({
       setMapStatus('That section has no saved location.', true);
       return false;
     }
-    stopGlide();
+    vp.stopGlide();
     cancelFlight();
 
     const from = {
-      lat: mapCenter.value.lat,
-      lon: mapCenter.value.lon,
-      zoom: mapZoom.value,
+      lat: vp.mapCenter.value.lat,
+      lon: vp.mapCenter.value.lon,
+      zoom: vp.mapZoom.value,
     };
     const to = targetViewFor(location);
     const settled =
       from.lat === to.lat && from.lon === to.lon && from.zoom === to.zoom;
     if (settled || duration <= 0 || reduceMotion()) {
       /* Still has to go there - arriving is not the same as being there. */
-      mapCenter.value = { lat: to.lat, lon: to.lon };
-      mapZoom.value = to.zoom;
-      clampCenterToWorld();
+      vp.mapCenter.value = { lat: to.lat, lon: to.lon };
+      vp.mapZoom.value = to.zoom;
+      vp.clampCenterToWorld();
       arriveAt(location);
       return true;
     }
 
-    mapFlying.value = true;
+    vp.mapFlying.value = true;
     setMapStatus(
-      location.label
-        ? `Travelling to ${location.label}\u2026`
-        : 'Travelling\u2026',
+      location.label ? `Travelling to ${location.label}…` : 'Travelling…',
     );
     flight = { from, to, pin: location, started: now(), duration, handle: 0 };
     stepFlight();
@@ -1027,9 +420,9 @@ export function createMapExplorer({
   }
 
   /*
-   * Centres the map on a stored location and pins it. This is the immediate
-   * jump: flyToLocation() is what a reader-initiated move should use, and this
-   * is what the map does when there is nothing to animate or nothing to travel.
+   * Centres the map on a stored location and pins it. This is the immediate jump:
+   * flyToLocation() is what a reader-initiated move should use, and this is what
+   * the map does when there is nothing to animate or nothing to travel.
    */
   function showMapLocation(value) {
     const location = normalizeLocation(value);
@@ -1037,15 +430,15 @@ export function createMapExplorer({
       setMapStatus('That section has no saved location.', true);
       return false;
     }
-    stopGlide();
-    mapCenter.value = { lat: location.lat, lon: location.lon };
-    clampCenterToWorld();
+    vp.stopGlide();
+    vp.mapCenter.value = { lat: location.lat, lon: location.lon };
+    vp.clampCenterToWorld();
     mapPin.value = location;
     /* Jump in close enough to be useful, but never zoom *out* to get there, and
        never below what this viewport can actually cover. */
-    if (mapZoom.value < 13) mapZoom.value = 13;
-    mapZoom.value = Math.max(mapZoom.value, minViewZoom.value);
-    commitTileZoom();
+    if (vp.mapZoom.value < 13) vp.mapZoom.value = 13;
+    vp.mapZoom.value = Math.max(vp.mapZoom.value, vp.minViewZoom.value);
+    vp.commitTileZoom();
     setMapStatus(
       location.label
         ? `${location.label} · ${formatCoordinates(location)}`
@@ -1061,73 +454,180 @@ export function createMapExplorer({
       : 'Pick a location on the map',
   );
 
+  /* --- GeoJSON layers ----------------------------------------------------- */
+
+  const geojsonLayers = ref([]);
+  const geojsonVisible = ref(true);
+
+  function loadGeoJSON(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = JSON.parse(event.target.result);
+          if (data.type !== 'FeatureCollection' && data.type !== 'Feature') {
+            reject(new Error('Not a valid GeoJSON file'));
+            return;
+          }
+          const features =
+            data.type === 'FeatureCollection' ? data.features : [data];
+          const layer = {
+            name: file.name.replace(/\.geojson$/i, ''),
+            features,
+            visible: true,
+          };
+          geojsonLayers.value = [...geojsonLayers.value, layer];
+          setMapStatus(`Loaded ${features.length} features from ${file.name}`);
+          resolve(layer);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  function toggleGeoJSONLayer(index) {
+    const layers = [...geojsonLayers.value];
+    layers[index] = { ...layers[index], visible: !layers[index].visible };
+    geojsonLayers.value = layers;
+  }
+
+  function removeGeoJSONLayer(index) {
+    const layers = [...geojsonLayers.value];
+    layers.splice(index, 1);
+    geojsonLayers.value = layers;
+    setMapStatus('Removed GeoJSON layer.');
+  }
+
+  function clearGeoJSONLayers() {
+    geojsonLayers.value = [];
+    setMapStatus('Cleared all GeoJSON layers.');
+  }
+
+  function setGeoJSONVisible(visible) {
+    geojsonVisible.value = visible;
+  }
+
+  const geojsonFeatureCount = computed(() =>
+    geojsonLayers.value.reduce((sum, layer) => sum + layer.features.length, 0),
+  );
+
+  /*
+   * The loaded layers as drawable shapes, in viewport pixels.
+   *
+   * Renderer-independent on purpose. It used to be reachable only from the canvas
+   * renderer, so with `#map-toggle-renderer` set to `dom` an imported
+   * FeatureCollection drew nothing while the sidebar reported it as loaded - a
+   * control that reported success and showed an empty map. Both renderers read this
+   * now, so the toggle chooses only how the *tiles* are drawn.
+   */
+  const geojsonShapesFor = computed(() =>
+    geojsonShapes({
+      layers: geojsonVisible.value ? geojsonLayers.value : [],
+      transform: vp.mapTransform.value,
+      tileSize,
+      tileZoom: vp.tileZoom.value,
+    }),
+  );
+
+  /* --- the shared viewport ------------------------------------------------- */
+
+  /*
+   * Built after the session's own state so the hooks below can close over it. The
+   * hooks are only ever called from a gesture, by which time `vp` is assigned - the
+   * alternative, passing this session's state into the viewport as constructor
+   * arguments, is the coupling that let the two copies drift apart.
+   */
+  const vp = createMapViewport({
+    doc,
+    tileUrl,
+    tileSize,
+    initialZoom,
+    initialCenter,
+    animate,
+    cancelFrame,
+    createImage,
+    now,
+    buffer,
+    rateFloorMs,
+    renderer: boot.map.renderer,
+    showGrid: boot.map.showGrid,
+    showCursor: boot.map.showCursor !== false,
+    getShapes: () => geojsonShapesFor.value,
+    /* A click that was not a drag drops a pin. The viewport has already turned the
+       event into a coordinate, so the hook takes the position, not the event. */
+    onClick: pinLocation,
+    /* A grab, a wheel, or a key the map used means the reader wants the map to stop
+       moving on its own. */
+    onInterrupt: cancelFlight,
+    /* Announce where a keyboard move landed. */
+    onViewMoved: reportViewCoordinates,
+  });
+
+  /*
+   * The Explorer's own teardown first, then the viewport's. The order is not
+   * incidental: a flight holds a frame handle that only this session's cancelFrame
+   * can cancel, so it cannot be cancelled after the viewport has been disposed.
+   */
+  function disposeMapExplorer() {
+    cancelFlight();
+    clearPlaceSelection();
+    vp.disposeViewport();
+  }
+
   return {
-    mapElement,
-    mapCenter,
-    mapZoom,
-    tileZoom,
-    mapSize,
+    /* --- the Explorer's own surface --- */
     mapPin,
     mapPinOffset,
     mapStatus,
     mapStatusError,
-    mapPanning,
-    mapFlying,
-    mapLoading,
     mapFilter,
-    mapRenderer,
-    mapShowGrid,
-    mapShowCursor,
     mapSidebarOpen,
-    mapCursorLocation,
-    mapCanvasContext,
-    mapTiles,
-    previousLayer,
-    previousTransform,
-    mapTransform,
-    mapScaleBar,
-    mapZoomLabel,
-    minViewZoom,
-    mapBadge,
-    tileSource,
-    setMapStatus,
-    noteTileLoaded,
-    setMapFilter,
-    setMapRenderer,
-    toggleMapSidebar,
-    setMapShowGrid,
-    setMapShowCursor,
+    mapCursorBearing,
+    selectedPlace,
+    selectPlace,
+    clearPlaceSelection,
     placeMarkerOffset,
-    canvasRenderer,
-    mapFilters: MAP_FILTERS,
-    createImage,
-    commitTileZoom,
-    panMapByPixels,
-    zoomMap,
-    zoomIn,
-    zoomOut,
-    locationFromEvent,
     pickMapLocation,
-    showMapLocation,
+    pinLocation,
+    setMapStatus,
+    setMapFilter,
+    toggleMapSidebar,
+    mapFilters: MAP_FILTERS,
+    /* --- travel --- */
     flyToLocation,
+    showMapLocation,
     cancelFlight,
-    measureMap,
-    startMapObserver,
+    targetViewFor,
+    /* --- GeoJSON --- */
+    geojsonLayers,
+    geojsonVisible,
+    geojsonFeatureCount,
+    geojsonShapesFor,
+    loadGeoJSON,
+    toggleGeoJSONLayer,
+    removeGeoJSONLayer,
+    clearGeoJSONLayers,
+    setGeoJSONVisible,
+    mapBadge,
     disposeMapExplorer,
-    handleMapPointerDown,
-    handleMapPointerMove,
-    handleMapPointerUp,
-    handleMapPointerCancel,
-    handleMapDoubleClick,
-    handleMapWheel,
-    handleMapKeydown,
-    handleMapPointerLeave,
-    handleWindowResize,
+    /*
+     * Everything else is the shared viewport, spread in rather than listed. Listing
+     * it would be forty lines to keep in step with map-viewport.js by hand, and a
+     * name added there but not here is exactly the kind of drift this file's
+     * header says it exists to prevent. The Explorer's own names are above, so a
+     * collision is a duplicate key that JavaScript silently resolves in the
+     * viewport's favour - hence the explicit ordering rather than
+     * `...viewportView` first.
+     */
+    ...vp,
   };
 }
 
 /* The app's single map explorer session, like every other tool. */
-const session = createMapExplorer();
+const session = createMapExplorer({ mapPlaces: appPlaces });
 
 export const mapElement = session.mapElement;
 export const mapCenter = session.mapCenter;
@@ -1150,14 +650,21 @@ export const mapCursorLocation = session.mapCursorLocation;
 export const mapCanvasContext = session.mapCanvasContext;
 export const mapFilters = session.mapFilters;
 export const mapTiles = session.mapTiles;
+export const mapAdmittedTiles = session.mapAdmittedTiles;
 export const previousLayer = session.previousLayer;
 export const previousTransform = session.previousTransform;
 export const mapTransform = session.mapTransform;
 export const mapScaleBar = session.mapScaleBar;
+export const mapCursorBearing = session.mapCursorBearing;
+export const selectedPlace = session.selectedPlace;
+export const selectPlace = session.selectPlace;
+export const clearPlaceSelection = session.clearPlaceSelection;
 export const mapZoomLabel = session.mapZoomLabel;
 export const minViewZoom = session.minViewZoom;
 export const mapBadge = session.mapBadge;
 export const tileSource = session.tileSource;
+export const isTileAdmitted = session.isTileAdmitted;
+export const admitTiles = session.admitTiles;
 export const setMapStatus = session.setMapStatus;
 export const noteTileLoaded = session.noteTileLoaded;
 export const setMapFilter = session.setMapFilter;
@@ -1166,6 +673,8 @@ export const toggleMapSidebar = session.toggleMapSidebar;
 export const setMapShowGrid = session.setMapShowGrid;
 export const setMapShowCursor = session.setMapShowCursor;
 export const placeMarkerOffset = session.placeMarkerOffset;
+export const pickMapLocation = session.pickMapLocation;
+export const pinLocation = session.pinLocation;
 export const canvasRenderer = session.canvasRenderer;
 export const commitTileZoom = session.commitTileZoom;
 export const panMapByPixels = session.panMapByPixels;
@@ -1173,7 +682,6 @@ export const zoomMap = session.zoomMap;
 export const zoomIn = session.zoomIn;
 export const zoomOut = session.zoomOut;
 export const locationFromEvent = session.locationFromEvent;
-export const pickMapLocation = session.pickMapLocation;
 export const showMapLocation = session.showMapLocation;
 export const flyToLocation = session.flyToLocation;
 export const cancelFlight = session.cancelFlight;
@@ -1184,8 +692,17 @@ export const handleMapPointerDown = session.handleMapPointerDown;
 export const handleMapPointerMove = session.handleMapPointerMove;
 export const handleMapPointerUp = session.handleMapPointerUp;
 export const handleMapPointerCancel = session.handleMapPointerCancel;
-export const handleMapPointerLeave = session.handleMapPointerLeave;
 export const handleMapDoubleClick = session.handleMapDoubleClick;
 export const handleMapWheel = session.handleMapWheel;
 export const handleMapKeydown = session.handleMapKeydown;
+export const handleMapPointerLeave = session.handleMapPointerLeave;
 export const handleWindowResize = session.handleWindowResize;
+export const geojsonLayers = session.geojsonLayers;
+export const geojsonVisible = session.geojsonVisible;
+export const geojsonFeatureCount = session.geojsonFeatureCount;
+export const geojsonShapesFor = session.geojsonShapesFor;
+export const loadGeoJSON = session.loadGeoJSON;
+export const toggleGeoJSONLayer = session.toggleGeoJSONLayer;
+export const removeGeoJSONLayer = session.removeGeoJSONLayer;
+export const clearGeoJSONLayers = session.clearGeoJSONLayers;
+export const setGeoJSONVisible = session.setGeoJSONVisible;

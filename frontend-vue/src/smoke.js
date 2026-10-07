@@ -26,7 +26,7 @@ export function smokeMayPersist(scope = globalThis) {
  * They are structural, never state-dependent: the five tool panes use v-show,
  * and the editor gate (.toc-pick) is what a fresh boot always shows.
  */
-const REQUIRED_ANCHORS = [
+export const REQUIRED_ANCHORS = [
   '.app-shell',
   '.app-grid',
   '.toc-manager-toolbar',
@@ -36,10 +36,19 @@ const REQUIRED_ANCHORS = [
   '.pdf-app',
   '.image-app',
   '.map-app',
+  '.google-map-app',
 ];
 
-/* One card per tool on the launcher, so the count and the pane count agree. */
-const EXPECTED_MENU_CARDS = 5;
+/*
+ * One card per tool on the launcher, so the count and the pane count agree.
+ *
+ * This was 5 while the launcher rendered 6, which meant the desktop smoke run
+ * failed against the app it was checking - the check and the shell disagreed and
+ * nothing caught it, because the smoke test is the only place that compares them
+ * and it needs a graphical session. tests/menu-cards.test.js now makes the same
+ * comparison in the ordinary test run.
+ */
+export const EXPECTED_MENU_CARDS = 6;
 
 /* Values exercising a normal summarize call: count 4, sum 10, mean 2.5. */
 const REPRESENTATIVE_VALUES = [1, 2, 3, 4];

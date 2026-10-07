@@ -13,6 +13,7 @@ defineProps({
   imagesBadge: { type: String, default: '' },
   outlineBadge: { type: String, default: '' },
   mapBadge: { type: String, default: '' },
+  googleMapBadge: { type: String, default: '' },
 });
 
 const emit = defineEmits(['select']);
@@ -63,6 +64,14 @@ const emit = defineEmits(['select']);
         <span class="app-card-copy">
           <strong>Map Explorer</strong>
           <small :title="mapBadge">{{ mapBadge }}</small>
+        </span>
+        <span class="app-card-arrow" aria-hidden="true">›</span>
+      </button>
+      <button class="app-card" data-app="googlemap" type="button" @click="emit('select', 'googlemap')">
+        <span class="app-icon google-map-icon" aria-hidden="true">GM</span>
+        <span class="app-card-copy">
+          <strong>Google Maps</strong>
+          <small :title="googleMapBadge">{{ googleMapBadge }}</small>
         </span>
         <span class="app-card-arrow" aria-hidden="true">›</span>
       </button>
