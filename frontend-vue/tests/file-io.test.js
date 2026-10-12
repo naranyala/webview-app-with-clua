@@ -209,6 +209,19 @@ describe('withFileTransfer', () => {
     );
     assert.equal(outcome.status, 'error');
     assert.equal(handled, false);
+    assert.deepEqual(lines.at(-1), {
+      message: 'Disk on fire. (READ_FAILED)',
+      isError: true,
+    });
+  });
+
+  test('a native error without a code falls back to the message alone', async () => {
+    const { lines, report } = collect();
+    const outcome = await withFileTransfer(
+      () => Promise.resolve({ error: { message: 'Disk on fire.' } }),
+      { report, messages: { error: 'fallback' } },
+    );
+    assert.equal(outcome.status, 'error');
     assert.deepEqual(lines.at(-1), { message: 'Disk on fire.', isError: true });
   });
 

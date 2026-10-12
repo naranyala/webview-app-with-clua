@@ -92,7 +92,7 @@ char *workspace_store_load(const char *path, size_t *length_out,
         if (g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
             g_clear_error(&error);
             store_result_set(result, WORKSPACE_STORE_OK);
-            return calloc(1, 1);
+            return g_malloc0(1);
         }
         g_clear_error(&error);
         store_result_set(result, WORKSPACE_STORE_ERR_READ);

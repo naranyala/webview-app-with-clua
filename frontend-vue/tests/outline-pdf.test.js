@@ -121,6 +121,7 @@ test('combining sends the name and the outline JSON to the host', async () => {
     name: 'report.pdf',
     pages: 4,
     bytes: 20480,
+    truncated: false,
   });
   assert.equal(session.outlinePdfBusy.value, false, 'the busy flag is cleared');
 });
@@ -142,6 +143,24 @@ test('the status and the summary report the page count and size', async () => {
   assert.equal(session.outlinePdfSummary.value, 'a.pdf · 1 page · 1 kB');
 });
 
+test('a truncated render says so in the status line', async () => {
+  const session = sessionWith({
+    renderOutlinePdf: () =>
+      Promise.resolve({
+        path: '/d/big.pdf',
+        name: 'big.pdf',
+        pages: 500,
+        bytes: 1048576,
+        truncated: true,
+      }),
+  });
+
+  await session.renderOutlinePdf('{}', 'big');
+
+  assert.equal(session.lastOutlinePdf.value.truncated, true);
+  assert.match(session.outlinePdfStatus.value, /only the first 10000 items/);
+});
+
 test('a host failure reports itself and records no file', async () => {
   const session = sessionWith({
     renderOutlinePdf: () =>
@@ -153,7 +172,10 @@ test('a host failure reports itself and records no file', async () => {
   assert.equal(await session.renderOutlinePdf('{}', 'a'), null);
   assert.equal(session.lastOutlinePdf.value, null);
   assert.equal(session.outlinePdfStatusError.value, true);
-  assert.equal(session.outlinePdfStatus.value, 'pick one');
+  assert.equal(
+    session.outlinePdfStatus.value,
+    'pick one (NO_WORKSPACE_DIRECTORY)',
+  );
   assert.equal(session.outlinePdfBusy.value, false);
 });
 

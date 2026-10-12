@@ -13,10 +13,12 @@
  * (saveTextFile) and plain ones (openPdf) are called the same way.
  */
 export function getNativeBinding(name) {
-  const binding = window[name];
+  const scope = globalThis.window ?? globalThis;
+  const binding = scope[name];
   if (typeof binding === 'function') return (...args) => binding(...args);
-  if (window.__webview__ && typeof window.__webview__.call === 'function') {
-    return (...args) => window.__webview__.call(name, ...args);
+  const bridge = scope.__webview__;
+  if (bridge && typeof bridge.call === 'function') {
+    return (...args) => bridge.call(name, ...args);
   }
   return null;
 }

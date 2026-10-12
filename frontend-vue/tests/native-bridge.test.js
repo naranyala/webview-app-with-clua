@@ -56,7 +56,7 @@ test('a missing binding returns null outside the host', () => {
   assert.equal(getNativeBinding('openPdf'), null);
 
   globalThis.window = undefined;
-  assert.throws(() => getNativeBinding('openPdf'), TypeError);
+  assert.equal(getNativeBinding('openPdf'), null);
 });
 
 test('runNativeCall passes object payloads through untouched', async () => {

@@ -67,6 +67,18 @@ export function createWorkspacePersistence({
     workspaceReport.value = report(store.getWorkspaceReport());
   }
 
+  /*
+   * Dismisses the header pill and the module-level report behind it (see
+   * TODO-066). Clearing only the local ref left the workspace.js report in
+   * place, so the next debounced persist() refreshed it back into view.
+   */
+  function dismissReport() {
+    if (typeof store.clearWorkspaceReport === 'function') {
+      store.clearWorkspaceReport();
+    }
+    refreshReport();
+  }
+
   /* Snapshot of everything worth restoring after a restart. */
   function snapshot() {
     return {
@@ -280,6 +292,7 @@ export function createWorkspacePersistence({
     schedule,
     hydrate,
     refreshReport,
+    dismissReport,
   };
 }
 

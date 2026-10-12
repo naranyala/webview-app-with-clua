@@ -117,11 +117,12 @@ export function createOutlinePdfSession({
       name: String(result.name || ''),
       pages: Number(result.pages) || 0,
       bytes: Number(result.bytes) || 0,
+      truncated: result.truncated === true,
     };
     setOutlinePdfStatus(
       `Wrote ${lastOutlinePdf.value.name} · ${lastOutlinePdf.value.pages} page${
         lastOutlinePdf.value.pages === 1 ? '' : 's'
-      }.`,
+      }${lastOutlinePdf.value.truncated ? ' · only the first 10000 items were rendered' : ''}.`,
     );
     return lastOutlinePdf.value;
   }

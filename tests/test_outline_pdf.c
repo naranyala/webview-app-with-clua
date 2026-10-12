@@ -414,6 +414,94 @@ static void test_choose_directory_schedules_a_picker_without_choosing(void) {
     assert(recorded_returns == 0);
 }
 
+static void test_small_render_reports_not_truncated(void) {
+    app_context app;
+    memset(&app, 0, sizeof(app));
+    app.outline_dir = workspace;
+    char *request = request_for("small", simple_outline);
+    reset_recordings();
+
+    on_render_outline_pdf("req", request, &app);
+
+    assert(string_contains(recorded_result, "\"error\"") == 0);
+    assert_contains(recorded_result, "\"truncated\":false", "small render");
+    char path[512];
+    snprintf(path, sizeof(path), "%s/small.pdf", workspace);
+    assert(starts_with_pdf_header(path));
+    unlink(path);
+    g_free(request);
+}
+
+static void test_overflow_reports_truncated(void) {
+    app_context app;
+    memset(&app, 0, sizeof(app));
+    app.outline_dir = workspace;
+
+    GString *items = g_string_new(NULL);
+    for (int i = 0; i < 10001; i++) {
+        if (i > 0) g_string_append_c(items, ',');
+        g_string_append(items, "{\"title\":\"t\",\"level\":1,\"content\":\"\"}");
+    }
+    GString *outline = g_string_new(NULL);
+    g_string_append(outline, "{\"format\":\"metrics-toc\",\"items\":[");
+    g_string_append_len(outline, items->str, items->len);
+    g_string_append(outline, "]}");
+    g_string_free(items, TRUE);
+    char *outline_text = g_string_free(outline, FALSE);
+    char *request = request_for("big", outline_text);
+    g_free(outline_text);
+    reset_recordings();
+
+    on_render_outline_pdf("req", request, &app);
+
+    assert(string_contains(recorded_result, "\"error\"") == 0);
+    assert_contains(recorded_result, "\"truncated\":true", "overflow render");
+    char path[512];
+    snprintf(path, sizeof(path), "%s/big.pdf", workspace);
+    assert(starts_with_pdf_header(path));
+    unlink(path);
+    g_free(request);
+}
+
+static void test_long_utf8_name_stays_valid(void) {
+    app_context app;
+    memset(&app, 0, sizeof(app));
+    app.outline_dir = workspace;
+
+    GString *raw = g_string_new(NULL);
+    for (int i = 0; i < 119; i++) g_string_append_c(raw, 'a');
+    g_string_append(raw, "\xc3\xa9");
+    char *raw_name = g_string_free(raw, FALSE);
+    char *request = request_for(raw_name, simple_outline);
+    g_free(raw_name);
+    reset_recordings();
+
+    on_render_outline_pdf("req", request, &app);
+
+    assert(string_contains(recorded_result, "\"error\"") == 0);
+    assert_contains(recorded_result, "\"truncated\":false", "utf8 name render");
+    assert_contains(recorded_result, ".pdf", "utf8 name render");
+    g_free(request);
+    /* The file on disk must itself be valid UTF-8 with no dangling lead byte. */
+    {
+        GDir *dir = g_dir_open(workspace, 0, NULL);
+        assert(dir != NULL);
+        const char *entry;
+        int found = 0;
+        while ((entry = g_dir_read_name(dir)) != NULL) {
+            if (g_str_has_suffix(entry, ".pdf")) {
+                assert(g_utf8_validate(entry, -1, NULL));
+                char path[512];
+                snprintf(path, sizeof(path), "%s/%s", workspace, entry);
+                unlink(path);
+                found++;
+            }
+        }
+        g_dir_close(dir);
+        assert(found > 0);
+    }
+}
+
 int main(void) {
     snprintf(workspace, sizeof(workspace), "/tmp/outline-pdf-test-%d", (int)getpid());
     if (g_mkdir_with_parents(workspace, 0755) != 0) {
@@ -431,6 +519,9 @@ int main(void) {
     test_an_unbroken_long_word_is_split_not_dropped();
     test_levels_are_clamped();
     test_items_without_titles_are_skipped();
+    test_small_render_reports_not_truncated();
+    test_overflow_reports_truncated();
+    test_long_utf8_name_stays_valid();
     test_choose_directory_schedules_a_picker_without_choosing();
 
     rmdir(workspace);

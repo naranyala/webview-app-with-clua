@@ -9,6 +9,7 @@
 
 #include "workspace_bindings.h"
 
+#include "json_io.h"
 #include "workspace_store.h"
 
 #include <stdio.h>
@@ -56,12 +57,25 @@ void on_load_workspace(const char *id, const char *request, void *argument) {
         return;
     }
 
-    if (length > 0 && !workspace_store_is_object(data, length)) {
-        fprintf(stderr, "loadWorkspace: stored workspace is not a JSON object, reporting INVALID_CONTENT\n");
-        free(data);
-        return_native_error(app->view, id, "INVALID_CONTENT",
-            "The saved workspace file is damaged and cannot be restored.");
-        return;
+    if (length > 0) {
+        int valid = 0;
+        if (!workspace_store_is_object(data, length) ||
+            memchr(data, '\0', length) != NULL) {
+            valid = 0;
+        } else {
+            json_result parse_status = JSON_ERR_MALFORMED;
+            json_value *root = json_parse(data, &parse_status);
+            valid = (root != NULL && parse_status == JSON_OK &&
+                     root->type == JSON_VALUE_OBJECT);
+            json_value_free(root);
+        }
+        if (!valid) {
+            fprintf(stderr, "loadWorkspace: stored workspace is not a JSON object, reporting INVALID_CONTENT\n");
+            g_free(data);
+            return_native_error(app->view, id, "INVALID_CONTENT",
+                "The saved workspace file is damaged and cannot be restored.");
+            return;
+        }
     }
 
     fprintf(stderr, "loadWorkspace: %zu bytes from disk\n", length);
@@ -75,7 +89,7 @@ void on_load_workspace(const char *id, const char *request, void *argument) {
     g_string_append_c(response, '}');
     webview_return(app->view, id, 0, response->str);
     g_string_free(response, TRUE);
-    free(data);
+    g_free(data);
 }
 
 /*

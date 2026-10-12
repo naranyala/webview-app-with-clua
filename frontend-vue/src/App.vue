@@ -93,6 +93,7 @@ import {
   tocStatusError,
 } from './toc-outline.js';
 import {
+  clearWorkspaceReport,
   getWorkspaceReport,
   hasNativeWorkspaceStore,
   loadWorkspaceNative,
@@ -178,6 +179,7 @@ const persistence = createWorkspacePersistence({
     loadWorkspaceNative,
     saveWorkspaceNative,
     getWorkspaceReport,
+    clearWorkspaceReport,
     hasUserInteracted,
   },
   boot: restoredWorkspace,
@@ -196,6 +198,7 @@ const {
   flush: flushWorkspace,
   schedule: scheduleWorkspaceSave,
   hydrate: hydrateNativeWorkspace,
+  dismissReport: dismissWorkspaceReport,
 } = persistence;
 
 /*
@@ -376,10 +379,6 @@ onBeforeUnmount(() => {
       title on one line, then the workspace report only when there is something
       to report. It was a 72px header with a brand mark and a subtitle; both
       were static, and the bar now reads as the status line it always was.
-
-      `workspaceReport = null` hides the pill but not the report itself - see
-      TODO-066, which is why the dismiss control is not yet wired to
-      clearWorkspaceReport().
     -->
     <header class="launcher-header">
       <div class="header-status">
@@ -400,7 +399,7 @@ onBeforeUnmount(() => {
           class="workspace-report-dismiss"
           type="button"
           aria-label="Dismiss workspace report"
-          @click="workspaceReport = null"
+          @click="dismissWorkspaceReport"
         >×</button>
       </div>
     </header>

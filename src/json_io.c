@@ -149,13 +149,19 @@ static json_result read_string(const char **cursor_ref, char *output, size_t *us
                 unsigned long code_point = 0;
                 if (!read_hex4(cursor + 1, &code_point)) return JSON_ERR_ESCAPE;
                 cursor += 5;
-                if (code_point >= 0xD800 && code_point <= 0xDBFF &&
-                    cursor[0] == '\\' && cursor[1] == 'u') {
+                if (code_point >= 0xD800 && code_point <= 0xDBFF) {
                     unsigned long low = 0;
-                    if (read_hex4(cursor + 2, &low) && low >= 0xDC00 && low <= 0xDFFF) {
+                    if (cursor[0] == '\\' && cursor[1] == 'u' &&
+                        read_hex4(cursor + 2, &low) && low >= 0xDC00 && low <= 0xDFFF) {
                         code_point = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
                         cursor += 6;
+                    } else {
+                        return JSON_ERR_ESCAPE;
                     }
+                } else if (code_point >= 0xDC00 && code_point <= 0xDFFF) {
+                    return JSON_ERR_ESCAPE;
+                } else if (code_point == 0) {
+                    return JSON_ERR_ESCAPE;
                 }
                 if (output != NULL) used = write_utf8(output, used, code_point);
                 else used += utf8_width(code_point);
@@ -468,7 +474,7 @@ static json_value *parse_array(json_parser *parser) {
             json_value_free(array);
             return NULL;
         }
-        if (!reserve_slot(&array->items, &capacity)) {
+        if (array->count >= capacity && !reserve_slot(&array->items, &capacity)) {
             json_value_free(child);
             json_value_free(array);
             parser->status = JSON_ERR_MEMORY;
@@ -525,7 +531,7 @@ static json_value *parse_object(json_parser *parser) {
             json_value_free(object);
             return NULL;
         }
-        if (!reserve_member(&object->members, &capacity)) {
+        if (object->count >= capacity && !reserve_member(&object->members, &capacity)) {
             json_value_free(key);
             json_value_free(child);
             json_value_free(object);

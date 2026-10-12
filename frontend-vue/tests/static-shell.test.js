@@ -606,13 +606,14 @@ test('Leaving the editor syncs the draft and the outline can force a save', () =
 
 test('A dismissed report stays away until persistence fails again', () => {
   for (const text of [
-    'workspaceReport = null',
-    '@click="workspaceReport = null"',
+    'dismissWorkspaceReport',
+    '@click="dismissWorkspaceReport"',
     'v-if="workspaceReport"',
-    'v-else',
+    'clearWorkspaceReport',
   ]) {
     assert.ok(component.includes(text), `missing ${text}`);
   }
+  assert.doesNotMatch(component, /@click="workspaceReport = null"/);
   for (const text of [
     'workspaceReport.value = report(store.getWorkspaceReport())',
   ]) {

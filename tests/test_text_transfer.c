@@ -251,6 +251,26 @@ static void test_suggest_name(void) {
     free(name);
 }
 
+static void test_suggest_name_sanitizes_fallback(void) {
+    char *name;
+
+    /* A dynamic fallback is scrubbed like any other name, not passed through. */
+    name = text_transfer_suggest_name("", "../../etc/passwd");
+    assert_string_equals(name, "passwd");
+    free(name);
+
+    name = text_transfer_suggest_name(" . ", "a:b/c\\d?.txt");
+    assert(name != NULL);
+    assert(strchr(name, '/') == NULL && strchr(name, '\\') == NULL);
+    assert(strchr(name, ':') == NULL && strchr(name, '?') == NULL);
+    free(name);
+
+    /* A fallback that sanitizes to nothing still yields the safe default. */
+    name = text_transfer_suggest_name("", " ... ");
+    assert_string_equals(name, "export.txt");
+    free(name);
+}
+
 static void test_strerror(void) {
     assert(string_contains(text_transfer_strerror(TEXT_TRANSFER_ERR_NULL), "missing"));
     assert(string_contains(text_transfer_strerror(TEXT_TRANSFER_ERR_ARGUMENT), "malformed"));
@@ -313,6 +333,7 @@ int main(void) {
     test_decode_rejects_malformed_requests();
     test_decode_rejects_oversized_content();
     test_suggest_name();
+    test_suggest_name_sanitizes_fallback();
     test_strerror();
     test_save_binding_validates_before_dispatch();
     test_open_binding_dispatches();

@@ -198,8 +198,12 @@ workspace directory. Two bindings in `src/outline_pdf.c` do it.
 ```js
 const folder = await window.chooseOutlineDirectory();
 const written = await window.renderOutlinePdf('report', outlineJson);
-// -> { path, name, pages, bytes }
+// -> { path, name, pages, bytes, truncated }
 ```
+
+`truncated` is true when the outline held more than `MAX_ITEMS` (10000) and only
+the first 10000 were rendered, so a reply can never imply completeness it does
+not have.
 
 `chooseOutlineDirectory` opens the folder chooser and records the answer on
 `app_context.outline_dir`. `renderOutlinePdf` takes `["suggestedName",

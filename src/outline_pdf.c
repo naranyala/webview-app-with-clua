@@ -399,7 +399,9 @@ static char *sanitize_pdf_name(const char *suggested) {
     } else if (name->len <= 120 && !g_str_has_suffix(name->str, ".pdf")) {
         g_string_append(name, ".pdf");
     } else if (name->len > 120) {
-        g_string_truncate(name, 120);
+        size_t keep = 120;
+        while (keep > 0 && (((unsigned char)name->str[keep] & 0xC0) == 0x80)) keep--;
+        g_string_truncate(name, keep);
         if (!g_str_has_suffix(name->str, ".pdf")) g_string_append(name, ".pdf");
     }
     return g_string_free(name, FALSE);
@@ -517,8 +519,12 @@ void on_render_outline_pdf(const char *id, const char *request, void *argument) 
     json_append_string(response, path);
     g_string_append(response, ",\"name\":");
     json_append_string(response, name);
-    g_string_append_printf(response, ",\"pages\":%d,\"bytes\":%ld}", pages,
-        (long)info.st_size);
+    {
+        const json_value *items = json_object_get(root, "items");
+        int truncated = (items != NULL && json_count(items) > MAX_ITEMS) ? 1 : 0;
+        g_string_append_printf(response, ",\"pages\":%d,\"bytes\":%ld,\"truncated\":%s}", pages,
+            (long)info.st_size, truncated ? "true" : "false");
+    }
     webview_return(app->view, id, 0, response->str);
 
 cleanup:

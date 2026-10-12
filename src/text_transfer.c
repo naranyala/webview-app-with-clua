@@ -101,9 +101,13 @@ char *text_transfer_suggest_name(const char *requested, const char *fallback) {
 
     if (clean[0] == '\0') {
         const char *safe = (fallback != NULL && fallback[0] != '\0') ? fallback : "export.txt";
+        char *scrubbed = text_transfer_suggest_name(safe, "export.txt");
         free(clean);
-        clean = malloc(strlen(safe) + 1);
-        if (clean != NULL) strcpy(clean, safe);
+        clean = scrubbed;
+        if (clean == NULL) {
+            clean = malloc(strlen("export.txt") + 1);
+            if (clean != NULL) strcpy(clean, "export.txt");
+        }
     }
     return clean;
 }

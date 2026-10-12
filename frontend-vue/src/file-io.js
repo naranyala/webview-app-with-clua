@@ -185,7 +185,12 @@ export async function withFileTransfer(
     return { status: 'error', value: null, result: null };
   }
   if (result.error) {
-    say(result.error.message || failed, true);
+    const code =
+      result.error && typeof result.error.code === 'string'
+        ? result.error.code
+        : null;
+    const message = result.error.message || failed;
+    say(code ? `${message} (${code})` : message, true);
     return { status: 'error', value: null, result };
   }
   if (result.canceled) {

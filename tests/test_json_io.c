@@ -144,6 +144,52 @@ static void test_exact_allocation(void) {
     json_free_values(values, 2);
 }
 
+static void test_read_rejects_nul_and_lone_surrogates(void) {
+    char *values[1] = {NULL};
+    json_result status;
+
+    /* \u0000 would decode to an embedded NUL, so strlen != measured length. */
+    status = json_read_string_array("[\"\\u0000\"]", 1, values, NULL);
+    assert(status == JSON_ERR_ESCAPE);
+    assert(values[0] == NULL);
+
+    /* Lone high surrogate with no low half. */
+    status = json_read_string_array("[\"\\ud83d\"]", 1, values, NULL);
+    assert(status == JSON_ERR_ESCAPE);
+    assert(values[0] == NULL);
+
+    /* Lone low surrogate. */
+    status = json_read_string_array("[\"\\ude00\"]", 1, values, NULL);
+    assert(status == JSON_ERR_ESCAPE);
+    assert(values[0] == NULL);
+
+    /* High surrogate followed by a non-surrogate escape. */
+    status = json_read_string_array("[\"\\ud83d\\u0041\"]", 1, values, NULL);
+    assert(status == JSON_ERR_ESCAPE);
+    assert(values[0] == NULL);
+
+    /* High surrogate followed by plain text. */
+    status = json_read_string_array("[\"\\ud83dX\"]", 1, values, NULL);
+    assert(status == JSON_ERR_ESCAPE);
+    assert(values[0] == NULL);
+
+    /* The well-formed pair still passes (guard against over-rejection). */
+    assert(json_read_string_array("[\"\\ud83d\\ude00\"]", 1, values, NULL) == JSON_OK);
+    assert(strlen(values[0]) == 4);
+    json_free_values(values, 1);
+
+    /* Same rejections through the general document parser. */
+    {
+        json_result parse_status = JSON_OK;
+        assert(json_parse("\"\\u0000\"", &parse_status) == NULL);
+        assert(parse_status != JSON_OK);
+        assert(json_parse("\"\\ud83d\"", &parse_status) == NULL);
+        assert(parse_status != JSON_OK);
+        assert(json_parse("\"\\ude00\"", &parse_status) == NULL);
+        assert(parse_status != JSON_OK);
+    }
+}
+
 static void test_read_rejects_raw_control_bytes(void) {
     char *values[1] = {NULL};
 
@@ -336,6 +382,7 @@ int main(void) {
     test_read_single();
     test_read_pair_with_escapes();
     test_read_unicode_and_surrogates();
+    test_read_rejects_nul_and_lone_surrogates();
     test_read_whitespace_and_empty();
     test_exact_allocation();
     test_read_rejects_raw_control_bytes();

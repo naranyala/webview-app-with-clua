@@ -86,6 +86,9 @@ function fakeStore({
       return saveNativeResult;
     },
     getWorkspaceReport: () => report,
+    clearWorkspaceReport: () => {
+      report = null;
+    },
     hasUserInteracted: () => interacted,
   };
 }
@@ -520,6 +523,20 @@ describe('the header report', () => {
     assert.equal(engine.workspaceReport.value.scope, 'save');
     assert.equal(engine.workspaceReport.value.code, 'WRITE_FAILED');
     assert.match(engine.workspaceReport.value.text, /not saved/i);
+  });
+
+  test('dismissing the report keeps it dismissed across a subsequent save', async () => {
+    const store = fakeStore();
+    const engine = build(store);
+    store.setReport({ scope: 'save', code: 'WRITE_FAILED', message: 'nope' });
+    engine.refreshReport();
+    assert.ok(engine.workspaceReport.value);
+    engine.dismissReport();
+    assert.equal(engine.workspaceReport.value, null);
+    assert.equal(store.getWorkspaceReport(), null);
+    engine.persist();
+    await settle();
+    assert.equal(engine.workspaceReport.value, null);
   });
 });
 

@@ -1935,7 +1935,7 @@ TODO-017 covers a template of that size now.
   the pre-check fails on `stat_call != NULL`, and moving it below the read fails
   on `stat_call < read_call`.
 
-### TODO-063 — Reject `\u0000` and lone surrogates in the JSON reader
+### TODO-063 — Reject `\u0000` and lone surrogates in the JSON reader — DONE
 
 - **Intent:** I3.3, I3.4, I4.1
 - **Priority:** P1
@@ -1952,8 +1952,13 @@ TODO-017 covers a template of that size now.
   it currently covers only well-formed surrogate *pairs*.
 - **Done when:** every decoded string's measured length equals its `strlen`, and
   ill-formed input is refused rather than silently reshaped.
+- **Evidence:** `src/json_io.c` rejects `\u0000`, lone high/low surrogates, and
+  high-surrogate-not-followed-by-low with `JSON_ERR_ESCAPE`; `tests/test_json_io.c`
+  covers NUL, lone high, lone low, high+non-surrogate, high+text, plus the same
+  three through `json_parse`. `make json-io-test`, `make test`,
+  `make sanitized-test` green.
 
-### TODO-064 — Stop splicing raw file bytes into a JSON response
+### TODO-064 — Stop splicing raw file bytes into a JSON response — DONE
 
 - **Intent:** I3.3, I3.4
 - **Priority:** P1
@@ -1969,6 +1974,11 @@ TODO-017 covers a template of that size now.
   `workspace_store_decode_argument` is JSON decoding that belongs in
   `json_io.c`.
 - **Done when:** `loadWorkspace` cannot return a body it would not accept.
+- **Evidence:** `on_load_workspace` now rejects embedded NUL and validates with
+  `json_parse` (must be `JSON_VALUE_OBJECT`) before splicing, else
+  `INVALID_CONTENT`; `workspace_store_load` NOENT returns `g_malloc0` and the
+  binding frees with `g_free` (was `calloc`/`free` mismatch). `make test`,
+  sanitizer suites green.
 
 ### TODO-065 — Fix the silent-failure and leak paths in the PDF heading extractor
 
@@ -1997,7 +2007,7 @@ TODO-017 covers a template of that size now.
   pre-set `*error` each produce a distinct, tested outcome — and none of them
   leaks.
 
-### TODO-066 — Wire the dismiss button to the report it claims to dismiss
+### TODO-066 — Wire the dismiss button to the report it claims to dismiss — DONE
 
 - **Intent:** I2.2, I2.5
 - **Priority:** P1
@@ -2016,8 +2026,15 @@ TODO-017 covers a template of that size now.
   click it.
 - **Done when:** dismissing the report keeps it dismissed across a subsequent
   save, and a test proves it by clicking the button and then triggering a save.
+- **Evidence:** `workspace-persistence.js` gained `dismissReport()` (clears the
+  module report via `store.clearWorkspaceReport`, then `refreshReport`);
+  `App.vue` imports it, passes it in the store bundle, and binds
+  `@click="dismissWorkspaceReport"`. `tests/workspace-persistence.test.js`
+  proves dismiss-then-persist stays dismissed; `tests/static-shell.test.js`
+  locks the wiring and rejects the old `@click="workspaceReport = null"`.
+  534/534 frontend tests green.
 
-### TODO-067 — Surface the host's error code, or stop claiming to
+### TODO-067 — Surface the host's error code, or stop claiming to — DONE
 
 - **Intent:** I2.2
 - **Priority:** P1
@@ -2035,6 +2052,10 @@ TODO-017 covers a template of that size now.
   protocol and are otherwise dead weight.
 - **Done when:** a host rejection with a `code` produces a status line that
   distinguishes it from a message-only failure.
+- **Evidence:** `file-io.js` reports `${message} (${code})` when a code is
+  present, message alone otherwise — one line fixing all six callers.
+  `tests/file-io.test.js` pins both halves; `tests/outline-pdf.test.js`
+  now expects `pick one (NO_WORKSPACE_DIRECTORY)`. 534/534 frontend green.
 
 ### TODO-068 — Cover the panes the DOM harness cannot currently reach
 
@@ -2103,7 +2124,7 @@ TODO-017 covers a template of that size now.
 - **Done when:** neither function is called from the template, and the word
   count is memoized per item.
 
-### TODO-072 — Make the host read its bindings without a browser global
+### TODO-072 — Make the host read its bindings without a browser global — DONE
 
 - **Intent:** I1.2, I4.1
 - **Priority:** P2
@@ -2117,6 +2138,10 @@ TODO-017 covers a template of that size now.
   write its first test.)
 - **Done when:** a plain-node consumer of any session reports "no host" rather
   than throwing.
+- **Evidence:** `native-bridge.js` reads `globalThis.window ?? globalThis`,
+  so no `window` global means null instead of a `ReferenceError`.
+  `tests/native-bridge.test.js` now asserts null with `window === undefined`.
+  534/534 frontend green.
 
 ### TODO-073 — Give the extraction thread and the bindings test coverage
 
@@ -2519,7 +2544,7 @@ object stream. The lever is font size.
 - **Fold TODO-074's flag in here** rather than separately: both change the same
   reply.
 
-### TODO-086 — Report truncation instead of dropping outline items
+### TODO-086 — Report truncation instead of dropping outline items — DONE
 
 - **Intent:** I2.5, I3.4
 - **Priority:** P1
@@ -2532,8 +2557,16 @@ object stream. The lever is font size.
   equivalent flags TODO-074 wants in `image_directory.c`.
 - **Done when:** a reply can never imply completeness it does not have, and the
   flag is tested.
+- **Evidence:** reply carries `"truncated":true/false` (computed from
+  `json_count(items) > MAX_ITEMS`); frontend stores it and reports “only the
+  first 10000 items were rendered”; docs updated. Tests: small render
+  `truncated:false`, 10001-item render `truncated:true` + valid PDF, in
+  `tests/test_outline_pdf.c`; frontend truncated-status case. While testing,
+  found and fixed a real `json_io.c` defect: `reserve_slot`/`reserve_member`
+  doubled on every push (no `count>=capacity` guard), so 10k siblings hit the
+  overflow guard and returned `JSON_ERR_MEMORY` — now guarded, 10k parses.
 
-### TODO-087 — Fix the two UTF-8 and unsanitised-name defects in the export path
+### TODO-087 — Fix the two UTF-8 and unsanitised-name defects in the export path — DONE
 
 - **Intent:** I3.4, I4.4
 - **Priority:** P2
@@ -2553,6 +2586,12 @@ object stream. The lever is font size.
     fallback through the same scrubber.
 - **Done when:** no name this path produces can contain a partial UTF-8
   sequence, and the fallback is sanitized like every other name.
+- **Evidence:** `sanitize_pdf_name` backs off over `0x80` continuation bytes
+  before truncating to 120; `text_transfer_suggest_name` runs the fallback
+  through itself (max depth 2, terminates on `export.txt`). Tests:
+  `test_suggest_name_sanitizes_fallback` (path traversal, reserved chars,
+  dot-only→default), `test_long_utf8_name_stays_valid` (`g_utf8_validate` on
+  the written file). Sanitizer suites green.
 
 ### Not planned for this feature
 
