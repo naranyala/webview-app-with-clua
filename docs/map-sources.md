@@ -10,7 +10,7 @@
 
 ### Host allowlist
 
-Only `tile.openstreetmap.org` is fetched. No other tile host is contacted.
+Only `tile.openstreetmap.org` is fetched by this viewer. No other tile host is contacted.
 
 This is enforced, not just documented: `src/csp.js` builds a
 `Content-Security-Policy` whose `img-src` is limited to the hosts listed in
@@ -30,7 +30,11 @@ exists to prevent.
 | Request type | Minimum interval | Notes |
 |-------------|-----------------|-------|
 | Tile fetch | 200 ms | Token bucket; `TILE_BURST` (8) requests may start at once |
-| Search (Nominatim) | 1000 ms | When search is wired through native host |
+
+There is no search row because there is no geocoder: no Nominatim calls exist
+anywhere in the tree, and a file of places is imported by coordinate rather
+than resolved by name (see `docs/frontend.md`). If search is ever wanted it
+belongs to the native transport in TODO-036.
 
 The floor is a **token bucket** in the explorer session, not a wait between
 requests. `TILE_BURST` (8) requests may start immediately — the first screenful —
@@ -194,7 +198,7 @@ have sent someone looking for code that does not exist:
   wanted, the place to put it is Nominatim via the native host, which is also the
   only version of it that obeys its usage policy.
 - **`locateMapPlace` and libcurl/GeoClue2 are speculation.** The location feature
-  that exists today, `geo-locate.js`, uses the browser's own
+  that exists today, `map-locate.js`, uses the browser's own
   `navigator.geolocation` and needs no native binding. Replacing it with GeoClue2
   would be a *downgrade* in portability for no stated reason, so it is not a step
   worth naming in advance.

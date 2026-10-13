@@ -331,8 +331,7 @@ static void test_parse_rejects_malformed(void) {
  * The depth bound is a security property, not a style choice: this parser is
  * recursive, and the input arrives straight from a webview call.
  */
-static void test_parse_bounds_nesting_depth(void) {
-    json_result status = JSON_OK;
+static void test_parse_bounds_nesting_depth(void) {    json_result status = JSON_OK;
     GString *deep = g_string_new(NULL);
     for (int index = 0; index < JSON_MAX_DEPTH + 10; index++) g_string_append_c(deep, '[');
     for (int index = 0; index < JSON_MAX_DEPTH + 10; index++) g_string_append_c(deep, ']');
@@ -349,6 +348,29 @@ static void test_parse_bounds_nesting_depth(void) {
     assert(root != NULL && status == JSON_OK);
     json_value_free(root);
     g_string_free(shallow, TRUE);
+}
+
+/*
+ * Wide containers must not exhaust the growth logic: the child slots used to
+ * double on every push rather than only when full, so a few thousand siblings
+ * tripped the overflow guard and failed with JSON_ERR_MEMORY. Ten thousand
+ * siblings is the outline's MAX_ITEMS scale, so it is the number that matters.
+ */
+static void test_parse_holds_ten_thousand_siblings(void) {
+    json_result status = JSON_OK;
+    GString *wide = g_string_new(NULL);
+    g_string_append_c(wide, '[');
+    for (int index = 0; index < 10000; index++) {
+        if (index > 0) g_string_append_c(wide, ',');
+        g_string_append_printf(wide, "%d", index);
+    }
+    g_string_append_c(wide, ']');
+    json_value *root = json_parse(wide->str, &status);
+    assert(root != NULL && status == JSON_OK);
+    assert(json_count(root) == 10000);
+    assert(json_number(json_at(root, 9999), -1) == 9999.0);
+    json_value_free(root);
+    g_string_free(wide, TRUE);
 }
 
 static void test_accessors_tolerate_wrong_types(void) {
@@ -396,6 +418,7 @@ int main(void) {
     test_parse_whitespace_and_empty_containers();
     test_parse_rejects_malformed();
     test_parse_bounds_nesting_depth();
+    test_parse_holds_ten_thousand_siblings();
     test_accessors_tolerate_wrong_types();
 
     printf("All JSON codec tests passed\n");

@@ -32,7 +32,6 @@ import {
   pdfStatus,
   pdfStatusError,
   pdfZoom,
-  renderAllPdfPages,
   setPdfPageCanvas,
   tocCached,
   tocCount,
@@ -40,6 +39,7 @@ import {
   tocMessage,
   tocState,
   togglePdfSidebar,
+  zoomPdfTo,
 } from '../pdf-session.js';
 import {
   attachPdfPageToToc,
@@ -48,6 +48,7 @@ import {
   linkTargetId,
   tocItems,
 } from '../toc-outline.js';
+import { plural } from '../workspace.js';
 import StatusLine from './StatusLine.vue';
 </script>
 
@@ -135,7 +136,7 @@ import StatusLine from './StatusLine.vue';
             <option v-for="item in tocItems" :key="item.id" :value="item.id">{{ item.title }}</option>
           </select>
           <button class="toolbar-button subtle" type="button" :disabled="!linkTarget || !pdfDocument" @click="attachPdfPageToToc">Attach page {{ pdfPageNumber }}</button>
-          <button class="toolbar-button subtle" type="button" :disabled="!tocHeadings.length" @click="importPdfHeadingsToToc">Import {{ tocHeadings.length }} heading{{ tocHeadings.length === 1 ? '' : 's' }}</button>
+          <button class="toolbar-button subtle" type="button" :disabled="!tocHeadings.length" @click="importPdfHeadingsToToc">Import {{ tocHeadings.length }} {{ plural(tocHeadings.length, 'heading') }}</button>
         </div>
       </aside>
       <!--
@@ -177,9 +178,9 @@ import StatusLine from './StatusLine.vue';
             <span>Page {{ pdfPageNumber }} of {{ pdfPageCount }}</span>
             <button class="toolbar-button subtle" type="button" :disabled="pdfLoading || pdfPageNumber >= pdfPageCount" @click="changePdfPage(1)">Next</button>
             <span class="pdf-zoom-label">Zoom</span>
-            <button class="toolbar-button subtle" type="button" :disabled="pdfLoading" @click="pdfZoom = Math.max(0.6, pdfZoom - 0.1); renderAllPdfPages()">−</button>
+            <button class="toolbar-button subtle" type="button" :disabled="pdfLoading" @click="zoomPdfTo(-0.1)">−</button>
             <span>{{ Math.round(pdfZoom * 100) }}%</span>
-            <button class="toolbar-button subtle" type="button" :disabled="pdfLoading" @click="pdfZoom = Math.min(2.5, pdfZoom + 0.1); renderAllPdfPages()">+</button>
+            <button class="toolbar-button subtle" type="button" :disabled="pdfLoading" @click="zoomPdfTo(0.1)">+</button>
           </div>
           <div v-if="pdfRenderError" class="pdf-render-state error">{{ pdfRenderError }}</div>
           <div v-if="pdfLoading" class="pdf-render-state">Rendering all pages…</div>

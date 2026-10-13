@@ -377,6 +377,40 @@ test('the native picker reports errors, cancellation, and empty results', async 
   globalThis.window = {};
 });
 
+test('a truncated scan and full-size fallbacks say so in the status', async () => {
+  globalThis.window = {
+    openImageDirectory: async () => ({
+      name: 'Holidays',
+      path: '/photos',
+      images: [photo('a.png')],
+      limited: true,
+      fallbacks: 0,
+    }),
+  };
+  await openImageDirectory();
+  assert.equal(
+    imageStatus.value,
+    '1 image found. · showing a partial scan; directory limits were reached',
+  );
+
+  globalThis.window = {
+    openImageDirectory: async () => ({
+      name: 'Holidays',
+      path: '/photos',
+      images: [photo('a.png'), photo('b.png')],
+      limited: false,
+      fallbacks: 1,
+    }),
+  };
+  await openImageDirectory();
+  assert.equal(
+    imageStatus.value,
+    '2 images found. · 1 image sent full-size (no thumbnail)',
+  );
+
+  globalThis.window = {};
+});
+
 test('the browser directory input filters, caps, and reports skips', async () => {
   const files = [
     { name: 'a.png', size: 10, webkitRelativePath: 'Holidays/a.png' },
@@ -397,6 +431,28 @@ test('the browser directory input filters, caps, and reports skips', async () =>
   assert.equal(
     imageStatus.value,
     '2 images loaded; 1 skipped by browser limits.',
+  );
+  assert.equal(imageLoading.value, false);
+  assert.equal(target.value, '');
+});
+
+test('one image plus one skip reads as singular, not "1 images"', async () => {
+  const files = [
+    { name: 'a.png', size: 10, webkitRelativePath: 'Holidays/a.png' },
+    {
+      name: 'huge.png',
+      size: 16 * 1024 * 1024 + 1,
+      webkitRelativePath: 'Holidays/huge.png',
+    },
+  ];
+  const target = { files, value: 'x' };
+
+  await loadBrowserImageDirectory({ target });
+
+  assert.equal(imageFiles.value.length, 1);
+  assert.equal(
+    imageStatus.value,
+    '1 image loaded; 1 skipped by browser limits.',
   );
   assert.equal(imageLoading.value, false);
   assert.equal(target.value, '');

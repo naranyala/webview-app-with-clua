@@ -27,8 +27,11 @@ Every binding is a promise-returning function on `window`. The canonical example
 const summary = await window.summarize([12.5, 15, 8.5, 14]);
 ```
 
-The frontend converts its text input into an array of finite JavaScript numbers
-before calling the bridge; numbers may be separated by commas or newlines.
+`summarize` is the contract's canonical example and its only caller-free
+binding: no production UI path calls it (see `docs/overview.md` — it survives
+for the Lua example, the bridge tests, and the smoke test). The parser accepts
+numbers separated by commas or newlines; the frontend has no metrics form, so
+nothing converts text input into that array today.
 
 ## Bridge detection
 
@@ -211,7 +214,8 @@ not have.
 webview cannot name a path to write into on its own. The name is reduced to a
 basename with `..`, separators, control characters, and the characters Windows
 rejects all removed, so it cannot escape the directory; it is bounded to 120
-characters and always ends in `.pdf`.
+characters on a UTF-8 boundary (never a dangling lead byte) and always ends in
+`.pdf`.
 
 The renderer is cairo's PDF surface. Cairo is already a transitive `gtk+-3.0`
 dependency, so no new library is introduced, and the output is an ordinary PDF
@@ -355,10 +359,12 @@ const saved = await window.saveWorkspace(JSON.stringify(workspace));
 ```
 
 `workspace` is the stored document itself (already JSON, so it is embedded
-unescaped), or `null` when nothing has been written yet. Non-empty bytes that
-are not a JSON object (a truncated or overwritten file) reject with
-`INVALID_CONTENT` instead of silently answering `null`, so the frontend can
-report the damaged copy rather than booting as if it were empty.
+unescaped), or `null` when nothing has been written yet. Validation is strict:
+bytes containing an embedded NUL, or non-empty bytes that do not parse as a
+JSON object through the shared codec, reject with `INVALID_CONTENT` instead
+of silently answering `null` or splicing damaged bytes into a reply that
+claims to be JSON — so the frontend can report the damaged copy rather than
+booting as if it were empty.
 
 `saveWorkspace` receives the serialized workspace as its single string
 argument and answers `{ "ok": true }`. Failures reject with the shared error
@@ -426,12 +432,20 @@ handles this through its `try/catch` path and displays the returned message.
 
 ## Frontend error handling
 
-The frontend provides detailed error messages for common issues:
+Every binding is reached through `runNativeCall`, which normalizes both
+outcomes to one shape: the host's payload on success, or
+`{ error: { code, message } }` when the call threw or answered with an error
+object — a rejection already shaped that way keeps both fields, so the code
+survives. Callers branch only on `result.error` and never need `try`/`catch`.
 
-- **Empty input**: "Enter one or more finite numbers separated by commas or newlines."
-- **Empty tokens**: "Found N empty tokens. Each comma or newline should separate two numbers."
-- **Invalid numbers**: "Invalid number(s): [list of first 3 invalid values]"
-- **Bridge unavailable**: "The native WebView bridge is unavailable. Run the desktop app to calculate metrics."
+`withFileTransfer` (`file-io.js`) reports `message (CODE)` when the host gave
+a code and the message alone otherwise, so one `say()` call keeps the
+protocol's codes (`NOT_A_PDF`, `PATH_GONE`, `NO_WORKSPACE_DIRECTORY`, …)
+visible in all six file-transfer status lines instead of falling back to a
+generic sentence. When there is no host at all, `getNativeBinding` returns
+`null` (never throws, even outside a browser) and the frontend reports that
+the desktop app is required, falling back to a browser file input where one
+makes sense.
 
 ## Testing the contract
 

@@ -133,11 +133,40 @@ static void test_extract_pdf_toc(void) {
     g_clear_error(&error);
     assert(toc.count == 0);
 
-    /* A path that does not exist fails the same user-facing way. */
+    /* A path that does not exist fails with the extractor diagnostic, not the
+     * empty-document message: a missing file is a different failure from a
+     * file with no headings. */
     assert(extract_pdf_toc(missing_pdf, &toc, &error) == 0);
     assert(error != NULL);
-    assert(strstr(error->message, "No headings could be extracted") != NULL);
+    assert(strstr(error->message, "No headings could be extracted") == NULL);
     g_clear_error(&error);
+
+    /* A stale error never masks the real outcome: it is cleared on entry. */
+    g_set_error(&error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "stale");
+    assert(extract_pdf_toc(heading_pdf, &toc, &error) == 1);
+    assert(error == NULL);
+    assert(toc.count == 1);
+    pdf_toc_clear(&toc);
+
+    /* A corrupt PDF fails with a diagnostic instead of an empty-list message. */
+    {
+        char *corrupt_pdf = g_build_filename(TEST_DIRECTORY, "corrupt.pdf", NULL);
+        assert(g_file_set_contents(corrupt_pdf, "%PDF-1.4\n%garbage that is not a PDF body\n", -1, NULL) == TRUE);
+        assert(extract_pdf_toc(corrupt_pdf, &toc, &error) == 0);
+        assert(error != NULL);
+        g_clear_error(&error);
+        assert(toc.count == 0);
+        remove(corrupt_pdf);
+        g_free(corrupt_pdf);
+    }
+
+    /* A NULL error slot never crashes: the failure is reported by status. */
+    {
+        pdf_toc null_toc = {0};
+        assert(extract_pdf_toc(missing_pdf, &null_toc, NULL) == 0);
+        assert(null_toc.count == 0);
+        pdf_toc_clear(&null_toc);
+    }
 
     g_free(heading_pdf);
     g_free(plain_pdf);

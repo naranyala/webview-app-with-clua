@@ -19,10 +19,14 @@ frontend-vue/
 ├── src/app-shell.js             active view and transition hooks
 ├── src/pdf-session.js           PDF load, render, paging, path history, heading panel
 ├── src/image-session.js         folder selection, grouping, lightbox
+├── src/image-viewer.js          pure file grouping and browser thumbnail helpers
+├── src/pdf-compat.js            Promise.withResolvers polyfill for older WebKit builds
 ├── src/google-maps-session.js   the Google viewer: layer, URL parsing, GeoJSON export
 ├── src/map-projection.js        Web Mercator projection, tile grid, layer transform
 ├── src/map-input.js             what a wheel, drag, or key means
 ├── src/map-canvas.js            the canvas tile renderer
+├── src/map-viewport.js          the pan/zoom/tile/rate-floor state machine both viewers share
+├── src/map-explorer.js          the OpenStreetMap session: pin, flights, filters, layers
 ├── src/map-geojson-view.js      loaded layers as drawable shapes, for either renderer
 ├── src/map-places.js            the persisted named-place collection
 ├── src/map-places-import.js     reading a file of places (GeoJSON or CSV)
@@ -56,9 +60,10 @@ Everything else lives in one module per concern:
 | `file-io.js` | system-picker-first transfers (`readTextFileNative`, `writeTextFile`), browser fallbacks, `suggestFileName`, and `withFileTransfer` — the one place the success/cancel/error outcomes are handled |
 | `smoke.js` | the `METRICS_SMOKE` checks, their single-line report, and the `smokeVerdict` call; inert without the host marker |
 | `workspace-persistence.js` | the persistence engine: snapshot, `apply`, `persist`, `flush`, `schedule`, `hydrate`, and the mode — every dependency injected |
+| `workspace.js` | the persisted schema and its normalization, `countWords`, `plural` (the one count suffix every status line, badge, and template uses), and the recent-path caps |
 | `editor-session.js` | `editorContent`, the caret readout, the word counter, and the transfer notice |
 | `app-shell.js` | `view`, `selectView()`, and the transition hooks `onViewLeaveEditor` / `onViewEnterPdf` |
-| `pdf-session.js` | document loading, the canvas registry, paging, the remembered-path list, and the heading panel |
+| `pdf-session.js` | document loading, the canvas registry, paging, the remembered-path list, the heading panel, and `zoomPdfTo` — the one place a zoom's render failure is caught and routed to the status line |
 | `image-session.js` | folder pick, grouping, thumbnails, and the lightbox |
 | `map-explorer.js` | the Explorer's own half: the pin, the status line, the colour filters, flights between places, the saved-place measurements, and the GeoJSON layers. Everything a tiled map does regardless of source lives in `map-viewport.js` |
 | `map-viewport.js` | the map both viewers share: view state, the tile set and the rate floor that gates it, zoom commits, pan/zoom/inertia, the pointer, wheel, and keyboard handlers, and the viewport measurement. Three optional hooks — `onClick`, `onInterrupt`, `onViewMoved` — are how a session supplies the behaviour that genuinely differs, rather than a set of capability flags threaded through the gesture code |
@@ -241,18 +246,21 @@ writing flow:
 The six cards read and write one persisted record instead of isolated state:
 
 1. `src/workspace.js` defines the schema, normalizes every field on read and
-   write, migrates the legacy outline key, debounces saves, and records every
-   storage failure as a report (`getWorkspaceReport()`: scope, code, message)
-   instead of only logging it. Each save stamps `savedAt` so the newer copy
-   wins. `App.vue` renders the latest report as a dismissible
+   write, migrates the legacy outline key, and records every storage failure
+   as a report (`getWorkspaceReport()`: scope, code, message) instead of only
+   logging it. Each save stamps `savedAt` so the newer copy wins. The 250 ms
+   debounced write loop lives in `src/workspace-persistence.js`, not here —
+   it used to be inline in `App.vue`, where it was untestable.
+   `App.vue` renders the latest report as a dismissible
    `#workspace-report` pill in the status bar, so a corrupt stored copy,
    a rejected native read, or a failed write is visible in every view rather
-   than hidden in the console.
+   than hidden in the console. Dismissing the pill clears the report behind
+   it, so the next save does not resurrect the warning.
 2. `App.vue` seeds its refs from the synchronous `loadWorkspace()` cache and
    funnels every change (view, outline, bound item, editor buffer, PDF
-   session, image folder) through a single `workspaceState()` snapshot saved
-   by `scheduleWorkspaceSave()`, plus a flush on `pagehide`, `beforeunload`,
-   `visibilitychange`, and unmount.
+   session, image folder, combined-PDF folder) through the engine's single
+   `snapshot()`, saved by `scheduleWorkspaceSave()`, plus a flush on `pagehide`,
+   `beforeunload`, `visibilitychange`, and unmount.
 3. On mount it then adopts the file-backed copy written by the native host
    (`loadWorkspaceNative`) unless the user already interacted, and writes back
    through `saveWorkspaceNative` — serialized, one write at a time, skipping
@@ -369,8 +377,7 @@ right in memory, the UI is right, and it is gone after a restart.
 The whole Explorer's state, saved places included, was missing from that list.
 The one visible symptom was a "Save pin" button that appeared to work, because
 `promptSavePlace` had a hand-written save call - while renaming, removing,
-clearing, and every view option silently did nothing. `workspaceDirectory`, the
-folder the combined-outline PDF is written to, had the same defect.
+clearing, and every view option silently did nothing.
 
 `tests/workspace-persistence.test.js` now checks the two lists against each
 other: it derives the persisted refs from `snapshot()` and the watched refs from
@@ -379,7 +386,16 @@ handles all three access shapes the snapshot uses (a plain ref, an optional ref,
 and a getter, which is how the place collection is passed because it is replaced
 wholesale rather than mutated in place) and states the one name that differs
 rather than guessing at it. That check found the second, identical bug
-immediately.
+immediately: `workspaceDirectory`, the folder the combined-outline PDF is
+written to, was read by the snapshot and never watched.
+
+It then survived a third time in a place neither list can see. The engine can
+only persist what `App.vue` passes in its `sessions` object, and
+`workspaceDirectory` was missing there too — watched, snapshotted, and dropped
+on the floor, so every save wrote `''` while the TocPane kept showing the boot
+value. That is TODO-101, found by audit rather than by either check, and
+`tests/static-shell.test.js` now asserts the sessions block names the ref, so
+there are two checks over three lists and no silent fourth.
 
 ### Importing places from a file
 

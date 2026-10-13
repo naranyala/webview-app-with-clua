@@ -35,7 +35,7 @@ import {
   syncTocDraft,
   tocItems,
 } from '../toc-outline.js';
-import { countWords } from '../workspace.js';
+import { countWords, plural } from '../workspace.js';
 import { saveLabelFor } from '../workspace-persistence.js';
 
 const documentTitle = computed(() =>
@@ -46,7 +46,7 @@ const documentStatus = computed(() => {
   const words =
     editorWordCount.value === 0
       ? 'Empty document'
-      : `${editorWordCount.value} word${editorWordCount.value === 1 ? '' : 's'}`;
+      : `${editorWordCount.value} ${plural(editorWordCount.value, 'word')}`;
   return [
     `Item ${activeTocIndex.value + 1} of ${tocItems.value.length}`,
     words,
@@ -106,7 +106,7 @@ const saveLabel = computed(() => saveLabelFor(props.persistenceMode));
                   <span class="toc-pick-level">H{{ item.level }}</span>
                   <span class="toc-pick-copy">
                     <strong>{{ item.title }}</strong>
-                    <small>{{ countWords(item.content) }} word{{ countWords(item.content) === 1 ? '' : 's' }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
+                    <small>{{ countWords(item.content) }} {{ plural(countWords(item.content), 'word') }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
                   </span>
                 </button>
               </li>

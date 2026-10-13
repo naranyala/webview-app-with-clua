@@ -77,12 +77,16 @@ static char *create_pdf_fingerprint(const char *path, long long size) {
     struct stat file_info;
     if (stat(path, &file_info) != 0) return NULL;
     char *canonical_path = g_canonicalize_filename(path, NULL);
-    char *identity = g_strdup_printf("%s:%lld:%ld", canonical_path, size,
+    char *identity;
+    char *fingerprint;
+    if (canonical_path == NULL) return NULL;
+    identity = g_strdup_printf("%s:%lld:%ld", canonical_path, size,
         (long)file_info.st_mtime);
-    char *fingerprint = g_compute_checksum_for_data(G_CHECKSUM_SHA256,
+    g_free(canonical_path);
+    if (identity == NULL) return NULL;
+    fingerprint = g_compute_checksum_for_data(G_CHECKSUM_SHA256,
         (const guchar *)identity, strlen(identity));
     g_free(identity);
-    g_free(canonical_path);
     return fingerprint;
 }
 
@@ -121,7 +125,12 @@ static void answer_pdf_document(webview_t view, const char *request_id,
     }
 
     url = calloc(PATH_MAX * 3 + 8, 1);
-    if (url == NULL || !build_file_url(path, url, (size_t)PATH_MAX * 3 + 8)) {
+    if (url == NULL) {
+        return_native_error(view, request_id, "INTERNAL_ERROR",
+            "The selected PDF could not be prepared for rendering.");
+        goto cleanup;
+    }
+    if (!build_file_url(path, url, (size_t)PATH_MAX * 3 + 8)) {
         return_native_error(view, request_id, "PDF_TOO_LARGE",
             "The selected PDF path is too long to open.");
         goto cleanup;
@@ -154,6 +163,17 @@ static void answer_pdf_document(webview_t view, const char *request_id,
     app->pdf_path = g_strdup(path);
     app->pdf_id = g_strdup(fingerprint);
     app->pdf_fingerprint = g_strdup(fingerprint);
+    if (app->pdf_path == NULL || app->pdf_id == NULL || app->pdf_fingerprint == NULL) {
+        g_free(app->pdf_path);
+        g_free(app->pdf_id);
+        g_free(app->pdf_fingerprint);
+        app->pdf_path = NULL;
+        app->pdf_id = NULL;
+        app->pdf_fingerprint = NULL;
+        return_native_error(view, request_id, "INTERNAL_ERROR",
+            "The selected PDF identity could not be stored.");
+        goto cleanup;
+    }
     /*
      * Built with the shared JSON writer into a growable buffer: the old
      * snprintf into a fixed buffer could deliver a truncated body with status
@@ -277,8 +297,31 @@ static gpointer extract_pdf_toc_worker(gpointer argument) {
     }
 
     pdf_toc_response *delivery = g_new0(pdf_toc_response, 1);
+    if (delivery == NULL) {
+        g_clear_error(&task->error);
+        g_atomic_int_dec_and_test(&active_pdf_toc_jobs);
+        pdf_toc_clear(&task->toc);
+        g_free(task->pdf.path);
+        g_free(task->pdf.fingerprint);
+        g_free(task->pdf.cache_path);
+        g_free(task->request_id);
+        g_free(task);
+        return NULL;
+    }
     delivery->view = task->view;
     delivery->request_id = g_strdup(task->request_id);
+    if (delivery->request_id == NULL) {
+        g_clear_error(&task->error);
+        g_atomic_int_dec_and_test(&active_pdf_toc_jobs);
+        pdf_toc_clear(&task->toc);
+        g_free(task->pdf.path);
+        g_free(task->pdf.fingerprint);
+        g_free(task->pdf.cache_path);
+        g_free(task->request_id);
+        g_free(delivery);
+        g_free(task);
+        return NULL;
+    }
     if (task->error != NULL) {
         /* Same error shape as every other binding, written by the codec. */
         GString *response = g_string_new(NULL);
@@ -323,11 +366,25 @@ void on_extract_pdf_toc(const char *id, const char *request, void *argument) {
     }
 
     pdf_toc_task *task = g_new0(pdf_toc_task, 1);
+    if (task == NULL) {
+        return_native_error(app->view, id, "INTERNAL_ERROR", "The table of contents worker could not start.");
+        return;
+    }
     task->view = app->view;
     task->request_id = g_strdup(id);
     task->pdf.path = g_strdup(app->pdf_path);
     task->pdf.fingerprint = g_strdup(app->pdf_fingerprint);
     task->pdf.cache_path = toc_cache_path(app->pdf_id);
+    if (task->request_id == NULL || task->pdf.path == NULL ||
+        task->pdf.fingerprint == NULL || task->pdf.cache_path == NULL) {
+        g_free(task->request_id);
+        g_free(task->pdf.path);
+        g_free(task->pdf.fingerprint);
+        g_free(task->pdf.cache_path);
+        g_free(task);
+        return_native_error(app->view, id, "INTERNAL_ERROR", "The table of contents worker could not start.");
+        return;
+    }
     g_atomic_int_inc(&active_pdf_toc_jobs);
     app->pdf_toc_thread = g_thread_new("pdf-toc-extraction", extract_pdf_toc_worker, task);
     if (app->pdf_toc_thread == NULL) {

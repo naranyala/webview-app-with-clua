@@ -106,6 +106,17 @@ export function countWords(text) {
   return trimmed === '' ? 0 : trimmed.split(/\s+/).length;
 }
 
+/*
+ * One pluralization for the whole frontend: `plural(n, 'place')` reads
+ * "1 place" / "2 places", and `plural(n, 'child', 'children')` covers the
+ * irregular case. Every count suffix in a status line, badge, or template
+ * goes through here so "1 images" cannot come back (it did, in the image
+ * browser-limits message, with only a 2-image test to guard it).
+ */
+export function plural(count, one, many = `${one}s`) {
+  return Number(count) === 1 ? one : many;
+}
+
 export function clampLevel(value) {
   return Math.min(3, Math.max(1, Number(value) || 1));
 }

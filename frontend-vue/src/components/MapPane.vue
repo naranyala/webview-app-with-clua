@@ -97,6 +97,7 @@ import {
   linkTargetId,
   tocItems,
 } from '../toc-outline.js';
+import { plural } from '../workspace.js';
 import StatusLine from './StatusLine.vue';
 
 const FILTER_LABELS = {
@@ -186,7 +187,7 @@ function handlePlacesFile(event) {
          different questions and neither replaces the other. */
       if (parsed.skipped > 0) {
         setPlaceStatus(
-          `${placeStatus.value} ${parsed.skipped} row${parsed.skipped === 1 ? '' : 's'} in ${file.name} had no point to place.`,
+          `${placeStatus.value} ${parsed.skipped} ${plural(parsed.skipped, 'row')} in ${file.name} had no point to place.`,
         );
       }
     })

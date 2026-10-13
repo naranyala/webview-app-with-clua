@@ -9,6 +9,8 @@
 
 #include "json_io.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -144,10 +146,14 @@ static int is_title_like(const char *title) {
 static int is_text_heading(const char *title, double size_ratio) {
     int alpha_count = 0;
     int word_count = 1;
-    size_t length = g_utf8_strlen(title, -1);
-    const char *last = title + strlen(title) - 1;
+    size_t length;
+    const char *last;
 
-    if (length < 2 || length > 100 || (last[0] == '.' || last[0] == ',' || last[0] == ';' || last[0] == ':')) return 0;
+    if (title == NULL) return 0;
+    length = g_utf8_strlen(title, -1);
+    if (length < 2 || length > 100) return 0;
+    last = title + strlen(title) - 1;
+    if (last[0] == '.' || last[0] == ',' || last[0] == ';' || last[0] == ':') return 0;
     for (const unsigned char *character = (const unsigned char *)title; *character != '\0'; character++) {
         if (g_ascii_isalpha(*character)) alpha_count++;
         if (*character == ' ') word_count++;
@@ -173,18 +179,50 @@ static int run_pdftotext(const char *path, const char *option, char **output, GE
         (char *)option, (char *)path, (char *)"-", NULL,
     };
     int wait_status = 0;
-    g_spawn_sync(NULL, arguments, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL,
-        output, NULL, &wait_status, error);
-    return error == NULL || *error == NULL;
+    gboolean spawned;
+    GError *local_error = NULL;
+    GError **slot = (error != NULL) ? error : &local_error;
+
+    if (path == NULL || output == NULL) {
+        g_set_error(slot, G_FILE_ERROR, G_FILE_ERROR_INVAL,
+            "No PDF path was provided for text extraction.");
+        g_clear_error(&local_error);
+        return 0;
+    }
+    *output = NULL;
+    spawned = g_spawn_sync(NULL, arguments, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL,
+        output, NULL, &wait_status, slot);
+    if (!spawned) {
+        g_clear_error(&local_error);
+        return 0;
+    }
+    if (!g_spawn_check_wait_status(wait_status, slot)) {
+        g_free(*output);
+        *output = NULL;
+        g_clear_error(&local_error);
+        return 0;
+    }
+    if (*output == NULL) {
+        g_set_error(slot, G_FILE_ERROR, G_FILE_ERROR_FAILED,
+            "The PDF text extractor returned no output (exit %d).", wait_status);
+        g_clear_error(&local_error);
+        return 0;
+    }
+    g_clear_error(&local_error);
+    return 1;
 }
 
 /*
  * Parses `pdftotext -tsv` output. Rows with level "5" are text runs; runs that
  * share a position are one line. Heading level comes from the line's height
  * compared with the median body height of the page.
+ *
+ * Returns 1 when headings were stored, 0 when none were found, and -1 when an
+ * allocation failed (nothing stored, nothing leaked) so the caller can report
+ * the out-of-memory distinctly instead of falling through to a second pass.
  */
 static int extract_tsv_headings(const char *text, pdf_toc *toc) {
-    char **rows = g_strsplit(text, "\n", -1);
+    char **rows = g_strsplit(text != NULL ? text : "", "\n", -1);
     text_line *lines = NULL;
     size_t line_count = 0;
     double *heights = NULL;
@@ -198,35 +236,51 @@ static int extract_tsv_headings(const char *text, pdf_toc *toc) {
             continue;
         }
         char *key = g_strdup_printf("%s:%s:%s:%s", fields[1], fields[2], fields[3], fields[4]);
+        GString *fresh_title = g_string_new(NULL);
+        if (key == NULL || fresh_title == NULL) {
+            g_free(key);
+            if (fresh_title != NULL) g_string_free(fresh_title, TRUE);
+            g_strfreev(fields);
+            goto out_of_memory;
+        }
         if (line_count == 0 || g_strcmp0(lines[line_count - 1].key, key) != 0) {
+            if (line_count + 1 > (SIZE_MAX / sizeof(*lines))) {
+                g_free(key);
+                g_string_free(fresh_title, TRUE);
+                g_strfreev(fields);
+                goto out_of_memory;
+            }
             text_line *resized = realloc(lines, (line_count + 1) * sizeof(*lines));
             if (resized == NULL) {
                 g_free(key);
+                g_string_free(fresh_title, TRUE);
                 g_strfreev(fields);
-                g_strfreev(rows);
-                return 0;
+                goto out_of_memory;
             }
             lines = resized;
             lines[line_count++] = (text_line){
                 .key = key,
                 .page = atoi(fields[1]),
                 .height = g_ascii_strtod(fields[9], NULL),
-                .title = g_string_new(NULL),
+                .title = fresh_title,
             };
         } else {
             g_free(key);
+            g_string_free(fresh_title, TRUE);
         }
         if (lines[line_count - 1].title->len > 0) g_string_append_c(lines[line_count - 1].title, ' ');
         g_string_append(lines[line_count - 1].title, fields[11]);
         g_strfreev(fields);
     }
     g_strfreev(rows);
+    rows = NULL;
 
     if (line_count == 0) {
         free(lines);
         return 0;
     }
     heights = g_new(double, line_count);
+    if (heights == NULL) goto out_of_memory;
     for (size_t index = 0; index < line_count; index++) heights[index] = lines[index].height;
     qsort(heights, line_count, sizeof(double), compare_double);
     double body_height = line_count % 2 == 0
@@ -245,7 +299,17 @@ static int extract_tsv_headings(const char *text, pdf_toc *toc) {
     }
     g_free(heights);
     free(lines);
-    return 1;
+    return toc->count > 0 ? 1 : 0;
+
+out_of_memory:
+    for (size_t index = 0; index < line_count; index++) {
+        if (lines[index].title != NULL) g_string_free(lines[index].title, TRUE);
+        g_free(lines[index].key);
+    }
+    free(lines);
+    g_free(heights);
+    if (rows != NULL) g_strfreev(rows);
+    return -1;
 }
 
 /* Fallback pass over `pdftotext -layout`: line-based, page = form feeds. */
@@ -266,13 +330,23 @@ static int extract_text_headings(const char *text, pdf_toc *toc) {
 
 int extract_pdf_toc(const char *path, pdf_toc *toc, GError **error) {
     char *output = NULL;
+    int tsv;
+    if (error != NULL) g_clear_error(error);
+    if (path == NULL || toc == NULL) {
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_INVAL, "No PDF path was provided for heading extraction.");
+        return 0;
+    }
     if (!run_pdftotext(path, "-tsv", &output, error)) {
         g_free(output);
         return 0;
     }
-    extract_tsv_headings(output, toc);
+    tsv = extract_tsv_headings(output, toc);
     g_free(output);
     output = NULL;
+    if (tsv < 0) {
+        g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_NOMEM, "The PDF headings could not be held in memory.");
+        return 0;
+    }
     if (toc->count == 0 && !run_pdftotext(path, "-layout", &output, error)) {
         g_free(output);
         g_clear_error(error);

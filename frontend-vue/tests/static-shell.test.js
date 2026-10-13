@@ -604,6 +604,35 @@ test('Leaving the editor syncs the draft and the outline can force a save', () =
   }
 });
 
+test('Every ref the snapshot reads is passed to the persistence engine', () => {
+  // The engine can only persist what App.vue hands it: a ref read by
+  // snapshot() but missing from the sessions object is silently never
+  // written, while the watcher still schedules saves for it. That is how the
+  // combined-PDF folder stopped surviving restarts.
+  const app = read('../src/App.vue');
+  const sessionsStart = app.indexOf(
+    'sessions: {',
+    app.indexOf('createWorkspacePersistence('),
+  );
+  assert.ok(sessionsStart !== -1, 'missing sessions object');
+  const storeStart = app.indexOf('store: {', sessionsStart);
+  assert.ok(
+    storeStart !== -1 && storeStart > sessionsStart,
+    'missing store object',
+  );
+  const sessionsBlock = app.slice(sessionsStart, storeStart);
+  for (const name of [
+    'workspaceDirectory',
+    'selectedImageGroup',
+    'googleMapLayer',
+  ]) {
+    assert.ok(
+      new RegExp(`^\\s{4}${name},?$`, 'm').test(sessionsBlock),
+      `${name} is read by the snapshot but never passed to the engine`,
+    );
+  }
+});
+
 test('A dismissed report stays away until persistence fails again', () => {
   for (const text of [
     'dismissWorkspaceReport',

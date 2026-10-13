@@ -20,6 +20,7 @@ import {
   MAX_PLACE_LABEL,
   MAX_SAVED_PLACES,
   normalizePlace,
+  plural,
 } from './workspace.js';
 
 export function createMapPlaces({
@@ -32,7 +33,7 @@ export function createMapPlaces({
   const editingPlaceId = ref(null);
   const placeStatus = ref(
     places.value.length > 0
-      ? `${places.value.length} place${places.value.length === 1 ? '' : 's'} saved.`
+      ? `${places.value.length} ${plural(places.value.length, 'place')} saved.`
       : 'Click the map to drop a pin, then save it as a named place.',
   );
   const placeStatusError = ref(false);
@@ -104,11 +105,10 @@ export function createMapPlaces({
       setPlaceStatus('That spot could not be saved.', true);
       return null;
     }
+    const total = places.value.length + 1;
     setPlaces(
       [place, ...places.value],
-      `Saved “${place.label}”. ${places.value.length + 1} place${
-        places.value.length + 1 === 1 ? '' : 's'
-      }.`,
+      `Saved “${place.label}”. ${total} ${plural(total, 'place')}.`,
     );
     return place;
   }
@@ -186,7 +186,7 @@ export function createMapPlaces({
     const parts = [];
     if (imported > 0) {
       parts.push(
-        `Imported ${imported} place${imported === 1 ? '' : 's'}. ${working.length} total.`,
+        `Imported ${imported} ${plural(imported, 'place')}. ${working.length} total.`,
       );
     }
     if (alreadyThere > 0) {
@@ -243,7 +243,7 @@ export function createMapPlaces({
     if (editingPlaceId.value === id) editingPlaceId.value = null;
     setPlaces(
       places.value.filter((candidate) => candidate.id !== id),
-      `Removed “${place.label}”. ${remaining} place${remaining === 1 ? '' : 's'} left.`,
+      `Removed “${place.label}”. ${remaining} ${plural(remaining, 'place')} left.`,
     );
     return place;
   }
@@ -276,7 +276,7 @@ export function createMapPlaces({
     if (!incoming) return false;
     setPlaces(
       [...incoming],
-      `${incoming.length} place${incoming.length === 1 ? '' : 's'} restored.`,
+      `${incoming.length} ${plural(incoming.length, 'place')} restored.`,
     );
     editingPlaceId.value = null;
     return true;

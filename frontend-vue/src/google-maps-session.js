@@ -33,6 +33,7 @@ import { restoredWorkspace } from './boot-state.js';
 import { formatCoordinates } from './geo.js';
 import { TILE_BUFFER, TILE_SIZE } from './map-projection.js';
 import { createMapViewport } from './map-viewport.js';
+import { plural } from './workspace.js';
 
 export const ZOOM_COMMIT_THRESHOLD = 0.5;
 export const ZOOM_COMMIT_DELAY_MS = 160;
@@ -259,7 +260,7 @@ export function createGoogleMapsViewer({
     }
     parsedPlaces.value = newPlaces;
     setMapStatus(
-      `Added ${places.length} place${places.length === 1 ? '' : 's'} from URL. Total: ${newPlaces.length}`,
+      `Added ${places.length} ${plural(places.length, 'place')} from URL. Total: ${newPlaces.length}`,
     );
     return true;
   }
@@ -268,7 +269,9 @@ export function createGoogleMapsViewer({
     const next = [...parsedPlaces.value];
     next.splice(index, 1);
     parsedPlaces.value = next;
-    setMapStatus(`Removed place. ${next.length} remaining.`);
+    setMapStatus(
+      `Removed place. ${next.length} ${plural(next.length, 'place')} remaining.`,
+    );
   }
 
   function clearParsedPlaces() {
@@ -314,7 +317,9 @@ export function createGoogleMapsViewer({
     a.download = 'google-maps-places.geojson';
     a.click();
     URL.revokeObjectURL(url);
-    setMapStatus(`Exported ${parsedPlaces.value.length} places to GeoJSON.`);
+    setMapStatus(
+      `Exported ${parsedPlaces.value.length} ${plural(parsedPlaces.value.length, 'place')} to GeoJSON.`,
+    );
   }
 
   return {

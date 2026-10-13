@@ -60,7 +60,10 @@ payloads are rejected at both ends of the size cap, writes into a missing
 directory fail cleanly, a directory path reports a read error, writes are
 atomic, JSON object detection guards the response shape, and binding argument
 decoding handles escapes, Unicode (including surrogate pairs), and malformed
-request lists.
+request lists. Above the store, the `loadWorkspace` binding re-validates the
+file with the shared codec (embedded NUL and non-object documents reject with
+`INVALID_CONTENT`), so a damaged copy is reported rather than spliced into a
+reply that claims to be JSON.
 
 Run:
 
@@ -89,9 +92,11 @@ make app-support-test
 
 [`tests/test_pdf_toc.c`](../tests/test_pdf_toc.c) generates fixture PDFs at
 runtime, runs the real `pdftotext`, and checks heading extraction (levels and
-pages), the "no headings" error, the per-document cache round trip including
-fingerprint and format-marker mismatches, and the JSON reply the TOC Manager
-parses. The XDG data directory is redirected into `build/pdf-toc-test`, so the
+pages), the per-document cache round trip including fingerprint and
+format-marker mismatches, and the JSON reply the TOC Manager parses. A
+corrupt or missing file reports the extractor's own diagnostic rather than
+the empty-document message, a stale error never masks the real outcome, and a
+`NULL` error slot is safe. The XDG data directory is redirected into `build/pdf-toc-test`, so the
 suite never writes to the real user home. It requires `pdftotext` on `PATH`.
 
 Run:
@@ -209,10 +214,12 @@ make image-directory-test
 `chooseOutlineDirectory` / `renderOutlinePdf` bindings with the webview calls
 replaced by recording stubs, so no GUI is involved. It covers the suggested-name
 sanitizer (traversal, absolute paths, backslashes, reserved characters, dots
-only, an over-long name), the refusal to write before a folder has been chosen,
-the rejection of malformed and non-object outlines, level clamping, items with
-no title, pagination of a long document, and that a word too wide for the
-measure is split rather than dropped.
+only, an over-long name that stays valid UTF-8), the refusal to write before a
+folder has been chosen, the rejection of malformed and non-object outlines,
+level clamping, items with no title, pagination of a long document, that a word
+too wide for the measure is split rather than dropped, and that a reply can
+never imply completeness it does not have (`truncated` is false for a small
+render and true for a 10001-item one).
 
 Cairo is linked for real, not mocked: "is this actually a PDF" and "does the page
 count go up" cannot be answered honestly against a fake surface. Every case
@@ -265,7 +272,8 @@ make outline-roundtrip-test
 `openTextFile` / `saveTextFile` plumbing without a GUI: the save argument
 decoder (escapes, surrogate pairs, whitespace, malformed and oversized
 requests), the suggested-name sanitizer (path stripping, reserved characters,
-fallbacks, UTF-8-safe caps), and the binding-level validation that rejects a
+fallbacks — including a hostile fallback, which is scrubbed like any other
+name — UTF-8-safe caps), and the binding-level validation that rejects a
 bad request before any dialog opens while a good one dispatches with its
 payload attached. The webview calls are recorded by the same stubs as the
 host plumbing tests.
@@ -280,9 +288,11 @@ make text-transfer-test
 
 [`tests/test_json_io.c`](../tests/test_json_io.c) covers the host's single
 JSON codec: the writer (escaping, error documents, no size limit) and the
-reader (escapes, `\uXXXX` with surrogate pairs, exact allocations, raw control
-bytes rejected, and a table of malformed requests). Every binding decodes
-through it, so this is where the shared grammar is pinned.
+reader (escapes, `\uXXXX` with surrogate pairs, rejected `\u0000` and lone
+surrogates on both the array and document APIs, exact allocations, raw control
+bytes rejected, container growth that holds 10000 siblings, and a table of
+malformed requests). Every binding decodes through it, so this is where the
+shared grammar is pinned.
 
 Run:
 
@@ -302,17 +312,25 @@ must *not* terminate).
 Run:
 
 ```sh
-make smoke-unit-test
+make smoke-verdict-test
 ```
 
-The sanitized target rebuilds all seven C test binaries with
+(`make smoke-unit-test` names no rule — it is a bare `.PHONY` entry, so it
+succeeds while testing nothing. The generated per-suite target is
+`smoke-verdict-test`, renamed from `smoke` so it cannot shadow the GUI
+`make smoke-test`.)
+
+The sanitized target rebuilds all eleven C test binaries with
 AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ### Lua integration tests
 
 [`tests/test_core.lua`](../tests/test_core.lua) verifies that the Lua wrapper
 can create engines, add values, summarize, reset, chain calls, and surface
-invalid values as Lua errors.
+invalid values as Lua errors — and that each failure is its own error: an
+overflow says overflow rather than "must be finite", a string is rejected
+rather than coerced, `from()` names the offending index, the metatable is
+locked, and a destroyed handle reports itself on add, summary, and reset.
 
 Run:
 
@@ -375,11 +393,13 @@ registered in C but undocumented, a source file missing from the README map.
 #### The mounted component
 
 `component-dom.test.js` is the one suite that mounts the real application. It
-drives the event paths the others can only assert about — clicking each of the six
-menu cards and checking its pane opens, declaring a section, the editor gate
+drives the event paths the others can only assert about — opening the menu,
+TOC, editor, PDF, and image panes, declaring a section, the editor gate
 refusing a draft with no section picked, two sections keeping separate drafts, a
 draft surviving a view switch, a rejected binding reaching the status line, and a
-restored workspace landing on the saved view.
+restored workspace landing on the saved view. The map and Google viewers have
+no mounted tests yet (TODO-068): their sessions are covered, their panes are
+not.
 
 Three details of the harness are load-bearing, and two of them were found by a
 test failing rather than by design:

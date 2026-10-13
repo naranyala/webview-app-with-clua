@@ -30,7 +30,7 @@ than written from memory.
 
 ## How these documents are kept honest
 
-Documentation drifts because nothing fails when it becomes wrong. Three tests in
+Documentation drifts because nothing fails when it becomes wrong. Four tests in
 the frontend suite exist purely to turn silent mismatches into red ones, and they
 are worth knowing about before editing any of the pages above:
 
@@ -39,6 +39,7 @@ are worth knowing about before editing any of the pages above:
 | `tests/menu-cards.test.js` | The launcher, the static shell, the view list, and the smoke check disagreeing about how many tools there are — and a component a template renders without importing it, which Vue silently renders as an unknown element |
 | `tests/bridge-bindings.test.js` | A binding registered in `webview_app.c` that the protocol does not document, and a binding the protocol claims that the host does not register |
 | `tests/readme-map.test.js` | A source file missing from the README's repository map, a map entry pointing at a deleted file, and a C suite that is in neither `tests/MANIFEST` nor the map |
+| `tests/template-bindings.test.js` | A template identifier with no script-setup binding behind it — the check that caught the Google viewer's "No location" label and the GeoJSON overlay's `0 0 undefined undefined` viewBox |
 
 Two further checks live inside `static-shell.test.js`: that the stylesheet's
 `@import` list covers every partial in the right order, and that the concatenated

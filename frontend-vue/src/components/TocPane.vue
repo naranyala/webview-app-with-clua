@@ -58,7 +58,7 @@ import {
   tocStatusError,
   undoTocRemoval,
 } from '../toc-outline.js';
-import { countWords } from '../workspace.js';
+import { countWords, plural } from '../workspace.js';
 import { scheduleWorkspaceSave } from '../workspace-persistence.js';
 import StatusLine from './StatusLine.vue';
 
@@ -213,7 +213,7 @@ async function previewOutlinePdf() {
               <template v-else>
                 <button class="toc-outline-select" type="button" @click="selectTocItem(item)">
                   <span class="toc-outline-title">{{ item.title }}</span>
-                  <small>{{ countWords(item.content) }} word{{ countWords(item.content) === 1 ? '' : 's' }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
+                  <small>{{ countWords(item.content) }} {{ plural(countWords(item.content), 'word') }} · {{ item.content ? 'draft saved' : 'no draft yet' }}</small>
                 </button>
                 <div class="toc-outline-meta">
                   <span class="toc-outline-level">H{{ item.level }}</span>

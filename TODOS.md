@@ -1980,7 +1980,7 @@ TODO-017 covers a template of that size now.
   binding frees with `g_free` (was `calloc`/`free` mismatch). `make test`,
   sanitizer suites green.
 
-### TODO-065 — Fix the silent-failure and leak paths in the PDF heading extractor
+### TODO-065 — Fix the silent-failure and leak paths in the PDF heading extractor — DONE
 
 - **Intent:** I3.4, I4.1
 - **Priority:** P1
@@ -2006,6 +2006,15 @@ TODO-017 covers a template of that size now.
 - **Done when:** a `pdftotext` non-zero exit, a `realloc` failure, and a
   pre-set `*error` each produce a distinct, tested outcome — and none of them
   leaks.
+- **Evidence:** `extract_tsv_headings` returns 1/0/-1 (headings/none/OOM with
+  full cleanup + overflow guard) and `extract_pdf_toc` maps -1 to
+  `G_FILE_ERROR_NOMEM` without a second pass; `run_pdftotext` checks spawn +
+  `g_spawn_check_wait_status` and is NULL-`error`-safe; entry clears stale
+  errors; `pdf_session.c` checks every `g_new0`/`g_strdup`/`calloc` (calloc
+  failure is now `INTERNAL_ERROR`, overlong path stays `PDF_TOO_LARGE`).
+  `is_text_heading` OOB on `""` fixed. Tests: missing file keeps its extractor
+  diagnostic, stale error cleared on success, corrupt PDF diagnosed, NULL error
+  slot safe. `make test` + sanitizer green.
 
 ### TODO-066 — Wire the dismiss button to the report it claims to dismiss — DONE
 
@@ -2072,7 +2081,7 @@ TODO-017 covers a template of that size now.
 - **Done when:** each of the five panes has at least one mounted test that
   exercises a binding it actually calls.
 
-### TODO-069 — Route the reader's render failures to a status line
+### TODO-069 — Route the reader's render failures to a status line — DONE
 
 - **Intent:** I2.2
 - **Priority:** P2
@@ -2088,8 +2097,13 @@ TODO-017 covers a template of that size now.
   try/catch, and catch the TOC call.
 - **Done when:** every path that can fail a render reaches the same status
   line, and none of them leaves a panel in a permanent loading state.
+- **Evidence:** `zoomPdfTo(step)` owns clamp + render + catch (routes to
+  `pdfRenderError` and `setPdfStatus(..., true)`); `PdfPane` zoom buttons call
+  it instead of raw `renderAllPdfPages`; `loadPdfToc` catches a throwing
+  binding into the TOC error panel instead of a floating rejection. Test: a
+  throwing `getPage` reaches the status line. 538/538 frontend green.
 
-### TODO-070 — Fix the pluralization drift with one helper
+### TODO-070 — Fix the pluralization drift with one helper — DONE
 
 - **Intent:** I2.1, I4.4
 - **Priority:** P2
@@ -2104,6 +2118,11 @@ TODO-017 covers a template of that size now.
   everywhere.
 - **Done when:** the "1 images" case is covered by a test, and no template or
   session builds a count suffix by hand.
+- **Evidence:** `plural(count, one, many)` in `workspace.js`, applied at all 24
+  sites (sessions, badges, and all four pane templates); the hardcoded message
+  and the always-plural Google export fixed; `rg "? '' : 's'" src/` is empty.
+  Tests: `plural` unit cases plus the live "1 image loaded; 1 skipped" case.
+  538/538 frontend green.
 
 ### TODO-071 — Move work out of the template and off the map's hot path
 
@@ -2851,6 +2870,82 @@ being true when the panes were extracted.
 because six is what renders. The alternative — deleting the Google viewer — would
 also resolve TODO-094's licensing question in one stroke, and that is a product
 decision rather than a documentation fix, so it is left open.
+
+## Pyramid evaluation follow-ups — 2026-10-13
+
+Evaluating the whole tree against `PYRAMID-OF-INTENTS.md` found the intents
+mostly held (I0.1, I1.2 minus the recorded tile crossing, I1.4, I2.2, I2.3,
+I3.1, I3.5, I4.2, I4.4) and ten TODOs have since shipped with evidence
+(063, 064, 066, 067, 069, 070, 072, 086, 087, plus 065). Three verified defects
+below had no TODO at all, so they get numbers instead of living in prose.
+Stale intent *text* (I1.1/I2.1 promising a metrics form, I3.3 promising one
+operation) and the stale snapshot counts belong to the pyramid file, not this
+backlog, and are left for the amendment there rather than fixed by stealth
+here.
+
+### TODO-101 — Persist the combined-PDF workspace directory — DONE
+
+- **Intent:** I1.5, I2.5
+- **Priority:** P1
+- **Work:** `App.vue:144-174` omits `workspaceDirectory` from the engine's
+  `sessions`, while `workspace-persistence.js:98` snapshots
+  `sessions.workspaceDirectory?.value ?? ''` and `:164-165` restores only `if
+  (sessions.workspaceDirectory)`. Every save therefore persists `''` and every
+  restore is a no-op — yet the watcher at `App.vue:234` watches the ref, so
+  edits schedule saves that can never record them. The TocPane display reads
+  the outline-pdf session's boot value, so it looks correct until a restart.
+  Pass the ref into the engine like every other persisted ref.
+- **Done when:** choosing a workspace folder survives a restart, and the
+  save-trigger check in `tests/workspace-persistence.test.js` covers the ref
+  so dropping it fails the suite the way the Explorer state once did.
+- **Evidence:** one-line fix (`workspaceDirectory` into the engine's sessions
+  object); new `static-shell.test.js` case asserting the sessions block names
+  `workspaceDirectory` (plus two controls), which fails if the ref is dropped
+  again. 539/539 frontend green.
+
+### TODO-102 — Surface the image scan's honesty flags in the viewer — DONE
+
+- **Intent:** I2.2, I2.3
+- **Priority:** P2
+- **Work:** The host sends `limited` and `fallbacks`
+  (`image_directory.c`, covered by `test_image_directory.c` per TODO-089),
+  but `openImageDirectoryResult`/`setImageCollection`
+  (`image-session.js:146-156,97-113`) ignore both and always report "N images
+  found" — a budget-truncated scan reads as complete and the full-resolution
+  fallback memory is invisible. This is the UI half of TODO-074, which covers
+  the reply side.
+- **Done when:** a truncated scan reports itself as partial and a non-zero
+  fallback count is visible, each covered by a session test.
+- **Evidence:** `openImageDirectoryResult` appends "showing a partial scan;
+  directory limits were reached" and "N image(s) sent full-size (no
+  thumbnail)" via the shared `plural()`; empty-result path unchanged. New
+  session test pins both wordings. 540/540 frontend green.
+
+### TODO-103 — Give the Lua binding distinct errors and a locked metatable
+
+- **Intent:** I3.2, I3.4
+- **Priority:** P2
+- **Work:** Three small fidelity defects in `src/lua_metrics.c`, all verified
+  against the built module: `:34` conflates overflow and dead-handle use into
+  "value must be finite"; `:42` reports a destroyed handle as "empty engine";
+  `:60-63` leaves the metatable mutable so `__gc` can be replaced and the
+  engine leaked, contradicting the file's own "scripts cannot leak one".
+  `luaL_checknumber` (`:33`) also coerces numeric strings, so
+  `core.from({1,"2"})` silently coerces against the documented `double`
+  contract. Map each `metrics_error` to its own message, guard `NULL` in
+  `reset`, set `__metatable` (or document why not), and either reject
+  non-numbers or document the coercion.
+- **Done when:** overflow, empty, and destroyed-handle each produce a distinct,
+  tested Lua error, and the metatable decision is recorded where the header
+  makes its no-leak promise.
+- **Evidence:** `check_live_engine` ("metrics engine is destroyed") on
+  add/summary/reset; overflow keeps its own message instead of "must be
+  finite"; non-numbers rejected with `luaL_argerror` (no string coercion);
+  `__metatable` locked; `from()` asserts a table and names the offending
+  index; header comment corrected to `require("native.metrics")`.
+  `tests/test_core.lua` pins overflow-vs-finite, string rejection, bad-index,
+  locked metatable, and destroyed-handle add/summary/reset. `make lua-test`
+  green, warning-free.
 
 ## Backlog rules
 

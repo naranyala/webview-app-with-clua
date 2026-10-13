@@ -98,6 +98,7 @@ import {
   hasNativeWorkspaceStore,
   loadWorkspaceNative,
   outlineSummary,
+  plural,
   saveWorkspace,
   saveWorkspaceNative,
   serializeWorkspace,
@@ -112,7 +113,7 @@ const outlineSummaryState = computed(() => outlineSummary(tocItems.value));
 const outlineBadge = computed(() => {
   const { total, written } = outlineSummaryState.value;
   if (total === 0) return 'Declare outline items, then write each section';
-  return `${total} item${total === 1 ? '' : 's'} declared · ${written} written`;
+  return `${total} ${plural(total, 'item')} declared · ${written} written`;
 });
 
 const editorBadge = computed(() => {
@@ -160,6 +161,7 @@ const persistence = createWorkspacePersistence({
     imageDirectoryPath,
     imageRecentPaths,
     selectedImageGroup,
+    workspaceDirectory,
     mapPlaces: mapPlacesSnapshot,
     applyMapPlaces,
     mapSidebarOpen,

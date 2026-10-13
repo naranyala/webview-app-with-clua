@@ -17,6 +17,7 @@ import { computed, ref } from 'vue';
 import { restoredWorkspace } from './boot-state.js';
 import { withFileTransfer } from './file-io.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
+import { plural } from './workspace.js';
 
 export function createOutlinePdfSession({
   boot = restoredWorkspace,
@@ -120,9 +121,7 @@ export function createOutlinePdfSession({
       truncated: result.truncated === true,
     };
     setOutlinePdfStatus(
-      `Wrote ${lastOutlinePdf.value.name} · ${lastOutlinePdf.value.pages} page${
-        lastOutlinePdf.value.pages === 1 ? '' : 's'
-      }${lastOutlinePdf.value.truncated ? ' · only the first 10000 items were rendered' : ''}.`,
+      `Wrote ${lastOutlinePdf.value.name} · ${lastOutlinePdf.value.pages} ${plural(lastOutlinePdf.value.pages, 'page')}${lastOutlinePdf.value.truncated ? ' · only the first 10000 items were rendered' : ''}.`,
     );
     return lastOutlinePdf.value;
   }
@@ -132,9 +131,7 @@ export function createOutlinePdfSession({
     const last = lastOutlinePdf.value;
     if (!last) return '';
     const kilobytes = Math.max(1, Math.round(last.bytes / 1024));
-    return `${last.name} · ${last.pages} page${
-      last.pages === 1 ? '' : 's'
-    } · ${kilobytes} kB`;
+    return `${last.name} · ${last.pages} ${plural(last.pages, 'page')} · ${kilobytes} kB`;
   });
 
   return {

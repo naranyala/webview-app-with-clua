@@ -15,7 +15,7 @@ import {
   makeThumbnail,
 } from './image-viewer.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
-import { MAX_RECENT_PATHS } from './workspace.js';
+import { MAX_RECENT_PATHS, plural } from './workspace.js';
 
 export function createImageSession({
   boot = restoredWorkspace,
@@ -108,7 +108,7 @@ export function createImageSession({
       : 'All Images';
     imageDirectoryName.value = directoryName || 'Selected directory';
     setImageStatus(
-      `${normalized.length} image${normalized.length === 1 ? '' : 's'} found.`,
+      `${normalized.length} ${plural(normalized.length, 'image')} found.`,
     );
   }
 
@@ -148,11 +148,25 @@ export function createImageSession({
     rememberImagePath(result.path);
     imageDirectoryPath.value = String(result.path || '');
     setImageCollection(images, result.name || 'Selected directory');
-    if (images.length === 0)
+    if (images.length === 0) {
       setImageStatus(
         'No supported images were found within the directory limits.',
         true,
       );
+      return;
+    }
+    // The host reports when its budgets stopped the walk (limited) or forced
+    // full-resolution originals through (fallbacks): without these a partial
+    // scan reads as complete and the memory back is invisible.
+    const notes = [];
+    if (result.limited === true)
+      notes.push('showing a partial scan; directory limits were reached');
+    if (Number(result.fallbacks) > 0)
+      notes.push(
+        `${result.fallbacks} ${plural(result.fallbacks, 'image')} sent full-size (no thumbnail)`,
+      );
+    if (notes.length > 0)
+      setImageStatus(`${imageStatus.value} · ${notes.join(' · ')}`);
   }
 
   /* --- lightbox controls ---------------------------------------------------- */
@@ -256,7 +270,7 @@ export function createImageSession({
       const skipped = result.skipped + result.oversized;
       if (skipped > 0)
         setImageStatus(
-          `${result.images.length} images loaded; ${skipped} skipped by browser limits.`,
+          `${result.images.length} ${plural(result.images.length, 'image')} loaded; ${skipped} skipped by browser limits.`,
         );
       else if (result.images.length === 0)
         setImageStatus(
@@ -342,11 +356,11 @@ export function createImageSession({
 
   const imagesBadge = computed(() => {
     if (imageFiles.value.length > 0) {
-      const count = `${imageFiles.value.length} image${imageFiles.value.length === 1 ? '' : 's'}`;
+      const count = `${imageFiles.value.length} ${plural(imageFiles.value.length, 'image')}`;
       return `${imageDirectoryName.value || 'Folder'} · ${count}`;
     }
     if (imageRecentPaths.value.length > 0) {
-      return `${imageRecentPaths.value.length} remembered director${imageRecentPaths.value.length === 1 ? 'y' : 'ies'}`;
+      return `${imageRecentPaths.value.length} remembered ${plural(imageRecentPaths.value.length, 'directory', 'directories')}`;
     }
     return 'Browse images grouped by folder';
   });

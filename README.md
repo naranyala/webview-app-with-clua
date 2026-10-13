@@ -235,7 +235,7 @@ Start at [`docs/README.md`](docs/README.md).
   clean builds a week apart resolve the same source — but it is still a first-use
   network dependency.
 - **A plain browser preview has no native bindings.** All 14 exist only inside the
-  desktop WebView host; workspace state falls back to `localStorage`, and the PDF,
+  desktop WebView host (`smokeVerdict` only under `METRICS_SMOKE=1`); workspace state falls back to `localStorage`, and the PDF,
   image, outline-PDF, and text-transfer features need the desktop app.
 - **The Map Explorer has no place search.** A geocoder would be a second page-side
   network crossing, so search belongs to the native transport.

@@ -27,7 +27,12 @@ import { normalizeLocation } from './geo.js';
 import * as imageSession from './image-session.js';
 import * as mapSession from './map-explorer.js';
 import * as pdfSession from './pdf-session.js';
-import { clampLevel, createTocItem, MAX_IMAGES_PER_ITEM } from './workspace.js';
+import {
+  clampLevel,
+  createTocItem,
+  MAX_IMAGES_PER_ITEM,
+  plural,
+} from './workspace.js';
 
 /*
  * The TOC Manager session: the outline spine, its links to the other tools, the
@@ -126,7 +131,7 @@ export function createTocOutline({
 
   const tocItemLabel = computed(
     () =>
-      `${tocItems.value.length} item${tocItems.value.length === 1 ? '' : 's'} declared`,
+      `${tocItems.value.length} ${plural(tocItems.value.length, 'item')} declared`,
   );
 
   const activeTocIndex = computed(() =>
@@ -404,7 +409,7 @@ export function createTocOutline({
           ? ''
           : ` (${entries.length - imported.length} skipped)`;
       setTocStatus(
-        `Imported ${imported.length} section${imported.length === 1 ? '' : 's'} from ${sourceName}${suffix}.`,
+        `Imported ${imported.length} ${plural(imported.length, 'section')} from ${sourceName}${suffix}.`,
       );
     }
     return true;
@@ -615,9 +620,7 @@ export function createTocOutline({
     }
     if (saveTocItems()) {
       const suffix = skipped > 0 ? ` · ${skipped} already present` : '';
-      setPdfStatus(
-        `Imported ${added} heading${added === 1 ? '' : 's'}${suffix}.`,
-      );
+      setPdfStatus(`Imported ${added} ${plural(added, 'heading')}${suffix}.`);
     }
   }
 
@@ -687,9 +690,11 @@ export function createTocOutline({
       return;
     }
     setImageStatus(
-      `${paths.length} attached image${paths.length === 1 ? '' : 's'} ${
-        paths.length === 1 ? 'needs' : 'need'
-      } the original folder to be selected again.`,
+      `${paths.length} attached ${plural(paths.length, 'image')} ${plural(
+        paths.length,
+        'needs',
+        'need',
+      )} the original folder to be selected again.`,
       true,
     );
   }

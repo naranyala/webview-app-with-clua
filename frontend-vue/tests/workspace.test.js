@@ -18,6 +18,7 @@ import {
   MAX_RECENT_PATHS,
   normalizeWorkspace,
   outlineSummary,
+  plural,
   saveWorkspace,
   saveWorkspaceNative,
   serializeWorkspace,
@@ -333,6 +334,15 @@ test('countWords treats whitespace-only drafts as empty', () => {
   assert.equal(countWords(''), 0);
   assert.equal(countWords('   \n\t'), 0);
   assert.equal(countWords('one two\nthree'), 3);
+});
+
+test('plural picks the singular only for exactly one', () => {
+  assert.equal(plural(1, 'place'), 'place');
+  assert.equal(plural(0, 'place'), 'places');
+  assert.equal(plural(2, 'place'), 'places');
+  assert.equal(plural(1, 'directory', 'directories'), 'directory');
+  assert.equal(plural(3, 'directory', 'directories'), 'directories');
+  assert.equal(plural('1', 'word'), 'word');
 });
 
 test('the native store is absent until the host exposes both bindings', async () => {

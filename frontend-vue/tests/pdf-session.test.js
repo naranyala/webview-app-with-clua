@@ -27,8 +27,10 @@ import {
   pdfPageNumber,
   pdfPath,
   pdfRecentPaths,
+  pdfRenderError,
   pdfStatus,
   pdfStatusError,
+  pdfZoom,
   rememberPdfPath,
   scrollToPdfPage,
   setPdfPageCanvas,
@@ -39,6 +41,7 @@ import {
   tocHeadings,
   tocMessage,
   tocState,
+  zoomPdfTo,
 } from '../src/pdf-session.js';
 import { MAX_RECENT_PATHS } from '../src/workspace.js';
 
@@ -290,6 +293,28 @@ test('an empty or failed extraction reports why', async () => {
   );
   assert.equal(tocState.value, 'error');
   globalThis.window = {};
+});
+
+test('a failed zoom render reaches the status line, not just the console', async () => {
+  pdfDocument.value = {
+    numPages: 1,
+    getPage: async () => {
+      throw new Error('shaders unavailable');
+    },
+  };
+  pdfZoom.value = 1;
+  pdfRenderError.value = '';
+  setPdfPageCanvas({ isConnected: true, width: 0, height: 0, style: {} }, 1);
+
+  await zoomPdfTo(0.1);
+
+  assert.equal(pdfRenderError.value, 'shaders unavailable');
+  assert.equal(pdfStatus.value, 'shaders unavailable');
+  assert.equal(pdfStatusError.value, true);
+
+  pdfPageCanvases.clear();
+  pdfDocument.value = null;
+  pdfRenderError.value = '';
 });
 
 test('the badge counts remembered documents instead of promising a resume', () => {

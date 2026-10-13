@@ -16,7 +16,7 @@ import { computed, nextTick, ref, shallowRef } from 'vue';
 import { restoredWorkspace } from './boot-state.js';
 import { withFileTransfer } from './file-io.js';
 import { getNativeBinding, runNativeCall } from './native-bridge.js';
-import { MAX_RECENT_PATHS } from './workspace.js';
+import { MAX_RECENT_PATHS, plural } from './workspace.js';
 
 /*
  * The PDF Reader session. Every dependency that reaches outside the module is
@@ -116,7 +116,18 @@ export function createPdfSession({
     }
     setTocMessage('Extracting headings and checking saved TOC…', 'loading');
     tocCount.value = 'Extracting…';
-    const result = await call(extractToc);
+    let result;
+    try {
+      result = await call(extractToc);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Could not extract headings from this PDF.';
+      setTocMessage(message, 'error');
+      tocCount.value = 'Extraction failed';
+      return;
+    }
     if (result.error) {
       setTocMessage(
         result.error.message || 'Could not extract headings from this PDF.',
@@ -133,7 +144,7 @@ export function createPdfSession({
     }
     tocHeadings.value = headings;
     tocCached.value = Boolean(result.cached);
-    tocCount.value = `${headings.length} heading${headings.length === 1 ? '' : 's'}`;
+    tocCount.value = `${headings.length} ${plural(headings.length, 'heading')}`;
     tocState.value = 'ready';
     tocMessage.value = '';
   }
@@ -184,6 +195,26 @@ export function createPdfSession({
   }
 
   /* --- navigation ----------------------------------------------------------- */
+
+  /*
+   * Zoom step that owns its render failure: the toolbar buttons used to call
+   * renderAllPdfPages() directly, so a failed render was console-only while
+   * the identical failure on tab-switch reached the status line.
+   */
+  async function zoomPdfTo(step) {
+    if (!pdfDocument.value) return;
+    pdfZoom.value = Math.min(2.5, Math.max(0.6, pdfZoom.value + step));
+    try {
+      await renderAllPdfPages();
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'The PDF pages could not be redrawn.';
+      pdfRenderError.value = message;
+      setPdfStatus(message, true);
+    }
+  }
 
   /* Derives the current page from the scroll offset while the user reads. */
   function handlePdfScroll() {
@@ -437,7 +468,7 @@ export function createPdfSession({
         : pdfName.value;
     }
     if (pdfRecentPaths.value.length > 0) {
-      return `${pdfRecentPaths.value.length} remembered document${pdfRecentPaths.value.length === 1 ? '' : 's'}`;
+      return `${pdfRecentPaths.value.length} remembered ${plural(pdfRecentPaths.value.length, 'document')}`;
     }
     return 'Open a PDF from your local system';
   });
@@ -497,6 +528,7 @@ export function createPdfSession({
     tocState,
     togglePdfSidebar,
     setPdfSidebarOpen,
+    zoomPdfTo,
   };
 }
 
@@ -536,6 +568,7 @@ export const pdfStatusError = session.pdfStatusError;
 export const pdfZoom = session.pdfZoom;
 export const togglePdfSidebar = session.togglePdfSidebar;
 export const renderAllPdfPages = session.renderAllPdfPages;
+export const zoomPdfTo = session.zoomPdfTo;
 export const rememberPdfPath = session.rememberPdfPath;
 export const forgetPdfPath = session.forgetPdfPath;
 export const scrollToPdfPage = session.scrollToPdfPage;
